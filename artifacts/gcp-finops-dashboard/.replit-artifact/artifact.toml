@@ -1,0 +1,28 @@
+kind = "web"
+previewPath = "/"
+title = "GCP Infrastructure & FinOps Dashboard"
+description = "A professional infrastructure and FinOps dashboard for exploring database, cloud, storage, processing, token, and SLA metrics with interactive filters, resource drill-downs, and threshold-based alerts powered by realistic mock time series."
+version = "1.0.0"
+id = "artifacts/gcp-finops-dashboard"
+router = "path"
+
+[[services]]
+name = "web"
+paths = [ "/" ]
+localPort = 25448
+
+[services.development]
+run = "pnpm --filter @workspace/gcp-finops-dashboard run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/gcp-finops-dashboard", "run", "build" ]
+serve = "static"
+publicDir = "artifacts/gcp-finops-dashboard/dist/public"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "25448"
+BASE_PATH = "/"
