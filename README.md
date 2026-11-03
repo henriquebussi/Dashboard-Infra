@@ -1,47 +1,46 @@
-# [Project name]
+# GCP Infrastructure & FinOps Dashboard
 
-_Replace the heading above with the project's name, and this line with one sentence describing what this app does for users._
-
-## Run & Operate
-
-- `npm run build` — build the dashboard and start the app at http://localhost:5173
-- `npm run build:only` — build the dashboard without starting the server (useful for CI)
-- `npm run typecheck` — full typecheck across all packages
-- `pnpm --filter @workspace/api-server run dev` — run the API server (port 5000)
-- `pnpm --filter @workspace/api-spec run codegen` — regenerate API hooks and Zod schemas from the OpenAPI spec
-- `pnpm --filter @workspace/db run push` — push DB schema changes (dev only)
-- Optional env: `PORT` (default `5173`) and `BASE_PATH` (default `/`)
-- Required env for the API: `DATABASE_URL` — Postgres connection string
+Dashboard de infraestrutura e FinOps para explorar métricas de banco de dados, cloud, storage, processamento, tokens e SLA, com filtros interativos, drill-down de recursos e alertas baseados em limites.
 
 ## Stack
 
-- pnpm workspaces, Node.js 24, TypeScript 5.9
-- API: Express 5
-- DB: PostgreSQL + Drizzle ORM
-- Validation: Zod (`zod/v4`), `drizzle-zod`
-- API codegen: Orval (from OpenAPI spec)
-- Build: esbuild (CJS bundle)
+- React 19 + TypeScript
+- Vite 7
+- Tailwind CSS 4
+- Radix UI + shadcn/ui
+- ApexCharts
+- Wouter para rotas
 
-## Where things live
+## Como rodar
 
-_Populate as you build — short repo map plus pointers to the source-of-truth file for DB schema, API contracts, theme files, etc._
+```bash
+npm install
+npm run dev
+```
 
-## Architecture decisions
+Acesse http://localhost:5173.
 
-_Populate as you build — non-obvious choices a reader couldn't infer from the code (3-5 bullets)._
+## Scripts
 
-## Product
+- `npm run dev` — inicia o servidor de desenvolvimento
+- `npm start` — alias para `npm run dev`
+- `npm run build` — typecheck + build de produção em `dist/`
+- `npm run preview` — serve o build de produção localmente
+- `npm run typecheck` — verifica os tipos TypeScript
 
-_Describe the high-level user-facing capabilities of this app once they exist._
+## Estrutura
 
-## User preferences
+```text
+src/
+  components/     componentes de UI e error boundary
+  features/       gráficos, filtros, cards e dados mock do dashboard
+  pages/          páginas da aplicação
+  lib/            utilitários
+  App.tsx         rotas e providers
+  main.tsx        entrada da aplicação
+```
 
-_Populate as you build — explicit user instructions worth remembering across sessions._
+## Observações
 
-## Gotchas
-
-_Populate as you build — sharp edges, "always run X before Y" rules._
-
-## Pointers
-
-- See the `pnpm-workspace` skill for workspace structure, TypeScript setup, and package details
+- O projeto usa apenas dados mock; não precisa de banco de dados, API ou variáveis de ambiente.
+- O favicon fica em `public/`.
