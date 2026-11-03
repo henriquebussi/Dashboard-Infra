@@ -1,4 +1,4 @@
-# GCP Infrastructure & FinOps Dashboard
+# Dashboard SB100
 
 Dashboard de infraestrutura e FinOps para explorar métricas de banco de dados, cloud, storage, processamento, tokens e SLA, com filtros interativos, drill-down de recursos e alertas baseados em limites.
 
