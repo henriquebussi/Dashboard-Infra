@@ -89,7 +89,7 @@ function Dashboard() {
               </div>
               <div className="min-w-0">
                 <div className="flex items-center gap-2">
-                  <span className="font-display text-[15px] font-extrabold tracking-[-.045em] text-[#203329]">Fieldnote</span>
+                  <span className="font-display text-[15px] font-extrabold tracking-[-.045em] text-[#203329]">SB100</span>
                   <span className="hidden h-4 w-px bg-[#dfe7e1] sm:block" />
                   <span className="hidden truncate text-[12px] font-medium text-[#69776f] sm:block">Infrastructure observability</span>
                 </div>
@@ -245,7 +245,7 @@ function Dashboard() {
               </Tabs>
             </div>
             <div className="flex flex-col gap-2 border-t border-[#edf1ee] bg-[#fbfcfb] px-4 py-3 text-[9px] text-[#89958d] sm:flex-row sm:items-center sm:justify-between md:px-7">
-              <div className="flex items-center gap-2"><span className="font-mono font-medium tracking-wide text-[#718077]">FIELDNOTE / GCP</span><span className="h-3 w-px bg-[#dce5df]" /><span>Metrics are seeded operational samples</span></div>
+              <div className="flex items-center gap-2"><span className="font-mono font-medium tracking-wide text-[#718077]">SB100 / GCP</span><span className="h-3 w-px bg-[#dce5df]" /><span>Metrics are seeded operational samples</span></div>
               <div className="flex items-center gap-2"><span>{selectedResources.length} resources in scope</span><span className="h-1 w-1 rounded-full bg-[#b8c2bb]" /><span className="font-mono">24-hour sample</span></div>
             </div>
           </div>

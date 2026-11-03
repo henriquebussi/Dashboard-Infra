@@ -4,12 +4,14 @@ _Replace the heading above with the project's name, and this line with one sente
 
 ## Run & Operate
 
+- `npm run build` — build the dashboard and start the app at http://localhost:5173
+- `npm run build:only` — build the dashboard without starting the server (useful for CI)
+- `npm run typecheck` — full typecheck across all packages
 - `pnpm --filter @workspace/api-server run dev` — run the API server (port 5000)
-- `pnpm run typecheck` — full typecheck across all packages
-- `pnpm run build` — typecheck + build all packages
 - `pnpm --filter @workspace/api-spec run codegen` — regenerate API hooks and Zod schemas from the OpenAPI spec
 - `pnpm --filter @workspace/db run push` — push DB schema changes (dev only)
-- Required env: `DATABASE_URL` — Postgres connection string
+- Optional env: `PORT` (default `5173`) and `BASE_PATH` (default `/`)
+- Required env for the API: `DATABASE_URL` — Postgres connection string
 
 ## Stack
 
