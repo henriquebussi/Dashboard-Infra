@@ -11,6 +11,7 @@ type Props = { metric: Metric; period: Period; multiplier: number; onSelect: (me
 export function MetricCard({ metric, period, multiplier, onSelect }: Props) {
   const chart = generateHourlySeries(period, metric.series.map((value) => value * multiplier));
   const TrendIcon = metric.trend === 'up' ? ArrowUpRight : metric.trend === 'down' ? ArrowDownRight : Minus;
+  const severityLabel = metric.severity === 'critical' ? 'crítico' : 'atenção';
   return (
     <Card className="group overflow-hidden rounded-lg border-[#e2e9e4] bg-white shadow-[0_1px_2px_rgba(24,48,35,.025)] transition-all hover:border-[#b8d2c2] hover:shadow-[0_8px_22px_rgba(34,78,53,.065)]">
       <CardContent className="p-0">
@@ -22,10 +23,10 @@ export function MetricCard({ metric, period, multiplier, onSelect }: Props) {
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <Badge data-testid={`badge-alert-${metric.id}`} className={metric.severity === 'critical' ? 'h-5 gap-1 rounded-sm border border-[#f1c6c0] bg-[#fff1ef] px-1.5 text-[9px] font-bold uppercase tracking-wide text-[#a83c30] hover:bg-[#fff1ef]' : 'h-5 gap-1 rounded-sm border border-[#efd8a8] bg-[#fff8e8] px-1.5 text-[9px] font-bold uppercase tracking-wide text-[#916315] hover:bg-[#fff8e8]'}>
-                      <span className={`h-1.5 w-1.5 rounded-full ${metric.severity === 'critical' ? 'bg-[#bc493d]' : 'bg-[#bd8b2c]'}`} />{metric.severity}
+                      <span className={`h-1.5 w-1.5 rounded-full ${metric.severity === 'critical' ? 'bg-[#bc493d]' : 'bg-[#bd8b2c]'}`} />{severityLabel}
                     </Badge>
                   </TooltipTrigger>
-                  <TooltipContent side="top" className="max-w-56 text-xs">{metric.action ?? 'Review resource pressure and recent changes.'}</TooltipContent>
+                  <TooltipContent side="top" className="max-w-56 text-xs">{metric.action ?? 'Revise a pressão do recurso e as mudanças recentes.'}</TooltipContent>
                 </Tooltip>
               )}
             </div>
@@ -33,7 +34,7 @@ export function MetricCard({ metric, period, multiplier, onSelect }: Props) {
               <div>
                 <div className="font-display text-[27px] font-bold leading-none tracking-[-.045em] text-[#1d3027]" data-testid={`value-metric-${metric.id}`}>{metric.value}</div>
                 <div className={`mt-2 inline-flex items-center gap-1 font-mono text-[10px] font-medium ${metric.trend === 'down' ? 'text-[#287553]' : metric.severity ? 'text-[#a56c14]' : 'text-[#738078]'}`}>
-                  <TrendIcon className="h-3 w-3" />{metric.change}<span className="font-sans font-normal text-[#9aa49e]">vs prior</span>
+                  <TrendIcon className="h-3 w-3" />{metric.change}<span className="font-sans font-normal text-[#9aa49e]">vs. período anterior</span>
                 </div>
               </div>
               <ArrowRight className="mb-1 h-4 w-4 text-[#a2b1a8] opacity-0 transition-all group-hover:translate-x-0.5 group-hover:opacity-100" />
