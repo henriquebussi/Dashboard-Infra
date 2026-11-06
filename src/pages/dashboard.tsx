@@ -11,10 +11,47 @@ import { ApexChart } from '@/features/dashboard/ApexChart';
 import { DrilldownDialog } from '@/features/dashboard/DrilldownDialog';
 import { FiltersBar } from '@/features/dashboard/FiltersBar';
 import { MetricCard } from '@/features/dashboard/MetricCard';
+import { SourceDot, type DataSource } from '@/features/dashboard/SourceDot';
 import { generateHourlySeries, resources, sections, type Environment, type Metric, type Period, type SectionData } from '@/features/dashboard/mock-data';
+import { useGcpMetrics, useGcpHealth, useOverview, envToBackend, extractSeries, type UseGcpMetricsResult, type UseOverviewResult } from '@/lib/useMetrics';
+import { applyOverviewToSections, buildOverviewSeries, getOverviewAvailability, getOverviewAvailabilityChange } from '@/lib/overview';
+import type { MetricCategory } from '@/lib/api';
 
 const logoUrl = `${import.meta.env.BASE_URL}CCDSB100.jpg`;
 const ALL_SERVICES = 'Todos os serviços';
+
+// ---------------------------------------------------------------------------
+// Data mode — real backend/GCP calls vs. local demo dataset
+// ---------------------------------------------------------------------------
+type DataMode = 'real' | 'mock';
+const DATA_MODE_KEY = 'ccd-sb100.data-mode';
+
+function readInitialDataMode(): DataMode {
+  if (typeof window === 'undefined') return 'real';
+  try {
+    const stored = window.localStorage.getItem(DATA_MODE_KEY);
+    if (stored === 'real' || stored === 'mock') return stored;
+  } catch {
+    // localStorage can be unavailable in private/embedded contexts.
+  }
+  return import.meta.env.VITE_USE_MOCK_DATA === 'true' ? 'mock' : 'real';
+}
+
+// ---------------------------------------------------------------------------
+// Section → backend category mapping
+// ---------------------------------------------------------------------------
+const SECTION_TO_CATEGORY: Record<string, MetricCategory> = {
+  database: 'database',
+  cloud: 'cloud',
+  storage: 'storage',
+  processing: 'processing',
+  tokens: 'tokens',
+  sla: 'sla',
+};
+
+// ---------------------------------------------------------------------------
+// Helpers (unchanged from original)
+// ---------------------------------------------------------------------------
 
 const sectionIcons: Record<string, typeof Database> = {
   database: Database, cloud: Cloud, storage: HardDrive, processing: Workflow, tokens: BrainCircuit, sla: ShieldCheck,
@@ -22,6 +59,7 @@ const sectionIcons: Record<string, typeof Database> = {
 const serviceSection: Record<string, string> = {
   'Cloud SQL': 'database', BigQuery: 'processing', 'Cloud Storage': 'storage', 'Compute Engine': 'cloud', 'Vertex AI': 'tokens', 'Pub/Sub': 'processing', Memorystore: 'database',
 };
+
 function getScopedResources(environment: Environment, service: string, search: string) {
   const term = search.trim().toLowerCase();
   return resources.filter((resource) => (
@@ -38,6 +76,10 @@ function getScopedSection(section: SectionData, service: string, scoped: typeof 
   const metrics = section.metrics.map((item) => {
     const matches = item.resources.filter((resource) => scopeNames.has(resource.name));
     const relevant = matches.length > 0 ? matches : item.resources.slice(0, Math.min(scoped.length, item.resources.length));
+    // Backend values are already scoped and formatted; do not rescale them.
+    if (item.isLive) {
+      return { ...item, resources: relevant };
+    }
     const ratio = relevant.length / Math.max(item.resources.length, 1);
     const numeric = Number(item.value.replace(/[^0-9.]/g, ''));
     const dynamicValue = Number.isFinite(numeric) && numeric > 0 && relevant.length > 0
@@ -52,6 +94,152 @@ function getScopedSection(section: SectionData, service: string, scoped: typeof 
   return { ...section, metrics };
 }
 
+// ---------------------------------------------------------------------------
+// Real-mode sanitisation — never render demo numbers as if they were real
+// ---------------------------------------------------------------------------
+
+const UNAVAILABLE = 'Indisponível';
+
+function unavailableMetric(metric: Metric): Metric {
+  return {
+    ...metric,
+    value: UNAVAILABLE,
+    change: '—',
+    trend: 'flat',
+    severity: undefined,
+    action: undefined,
+    resources: [],
+    series: metric.series.map(() => 0),
+    isLive: false,
+  };
+}
+
+function sanitizeRealSections(input: SectionData[]): SectionData[] {
+  return input.map((section) => ({
+    ...section,
+    metrics: section.metrics.map((metric) => (metric.isLive ? metric : unavailableMetric(metric))),
+    // Chart series are rebuilt from real readings; never fall back to mock values.
+    series: section.series.map((entry) => ({
+      ...entry,
+      values: entry.values.map(() => 0),
+    })),
+  }));
+}
+
+function getRealScopedSection(section: SectionData, service: string, search: string): SectionData | null {
+  if (service !== ALL_SERVICES && serviceSection[service] !== section.id) return null;
+  const term = search.trim().toLowerCase();
+  if (!term) return section;
+
+  const metrics = section.metrics.filter((metric) => (
+    `${metric.label} ${metric.description} ${metric.resources.map((resource) => resource.name).join(' ')}`
+      .toLowerCase()
+      .includes(term)
+  ));
+  return metrics.length > 0 ? { ...section, metrics } : null;
+}
+
+// ---------------------------------------------------------------------------
+// DataSourceBadge — shows Live / Degraded / Demo status
+// ---------------------------------------------------------------------------
+
+function DataSourceBadge({
+  overviewResult,
+  liveResult,
+  dataMode,
+}: {
+  overviewResult: UseOverviewResult;
+  liveResult: UseGcpMetricsResult;
+  dataMode: DataMode;
+}) {
+  if (dataMode === 'mock') {
+    return (
+      <div className="mt-1 flex items-center gap-1.5 text-[11px] font-medium text-[#596a60] md:justify-end">
+        <span className="h-1.5 w-1.5 rounded-full bg-[#bd493c]" />
+        Modo demonstração · <span className="text-[#9aa49e]">dados mock</span>
+      </div>
+    );
+  }
+  if (overviewResult.loading && !overviewResult.stale) {
+    return (
+      <div className="mt-1 flex items-center gap-1.5 text-[11px] font-medium text-[#596a60] md:justify-end">
+        <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-[#c2832b]" />
+        Conectando à API…
+      </div>
+    );
+  }
+  if (overviewResult.error) {
+    return (
+      <div className="mt-1 flex items-center gap-1.5 text-[11px] font-medium text-[#596a60] md:justify-end">
+        <span className="h-1.5 w-1.5 rounded-full bg-[#bd493c]" />
+        Backend indisponível · <span className="text-[#9aa49e]">Sem dados reais</span>
+      </div>
+    );
+  }
+  if (overviewResult.data) {
+    const liveGcp = Boolean(liveResult.data) && !liveResult.error;
+    const liveCached = liveGcp && liveResult.data?.data_source === 'cache';
+    return (
+      <div className="mt-1 flex items-center gap-1.5 text-[11px] font-medium text-[#596a60] md:justify-end">
+        <span className={`h-1.5 w-1.5 rounded-full ${overviewResult.stale ? 'animate-pulse' : ''} ${liveCached ? 'bg-[#c2832b]' : 'bg-[#4a9867]'}`} />
+        {liveCached ? 'API + GCP em cache' : liveGcp ? 'API + GCP ao vivo' : 'API conectada · dados do backend'}
+        {overviewResult.stale && <span className="text-[#9aa49e]">(atualizando)</span>}
+      </div>
+    );
+  }
+  return (
+    <div className="mt-1 flex items-center gap-1.5 text-[11px] font-medium text-[#596a60] md:justify-end">
+      <span className="h-1.5 w-1.5 rounded-full bg-[#bd493c]" />Sem dados reais
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// LiveChartOverlay — merges live GCP series into the chart when available
+// ---------------------------------------------------------------------------
+
+function buildLiveSeries(
+  liveResult: UseGcpMetricsResult,
+  section: SectionData,
+  period: Period,
+): { name: string; values: number[]; color?: string }[] | null {
+  if (!liveResult.data || liveResult.error) return null;
+
+  // Map section → primary metric names for the chart
+  const primaryMetrics: Record<string, string[]> = {
+    cloud: ['cpu_utilization', 'network_in'],
+    database: ['queries', 'connections'],
+    storage: ['total_bytes', 'bucket_bytes'],
+    processing: ['bq_job_count', 'bq_scanned_bytes'],
+    tokens: ['prediction_count', 'error_count'],
+    sla: ['pubsub_undelivered'],
+  };
+
+  const metricNames = primaryMetrics[section.id] ?? [];
+  const liveSeries: { name: string; values: number[]; color?: string }[] = [];
+  const colors = ['#216b4e', '#72a897', '#bfd8ca'];
+
+  for (const [i, metricName] of metricNames.entries()) {
+    const pts = extractSeries(liveResult.data, metricName);
+    if (pts.length === 0) continue;
+
+    const raw = pts.map((p) => p.value);
+    const { values } = generateHourlySeries(period, raw);
+    const mockEntry = section.series[i];
+    liveSeries.push({
+      name: mockEntry?.name ?? metricName,
+      values,
+      color: mockEntry?.color ?? colors[i % colors.length],
+    });
+  }
+
+  return liveSeries.length > 0 ? liveSeries : null;
+}
+
+// ---------------------------------------------------------------------------
+// Dashboard component
+// ---------------------------------------------------------------------------
+
 function Dashboard() {
   const { user, signOut } = useAuth();
   const [, navigate] = useLocation();
@@ -61,29 +249,113 @@ function Dashboard() {
   const [search, setSearch] = useState('');
   const [activeSection, setActiveSection] = useState('database');
   const [selectedMetric, setSelectedMetric] = useState<Metric | null>(null);
+  const [dataMode, setDataMode] = useState<DataMode>(readInitialDataMode);
+  const realMode = dataMode === 'real';
 
+  // Aggregated backend payload — primary data source (no GCP credentials needed).
+  const backendEnv = envToBackend(environment);
+  const overviewResult = useOverview(backendEnv, period, realMode);
+
+  // Live GCP data for the active section only (avoids N parallel requests).
+  const liveCategory = SECTION_TO_CATEGORY[activeSection] ?? 'database';
+  const liveResult = useGcpMetrics(liveCategory, backendEnv, period, realMode);
+
+  // GCP + Redis health (polled every 60 s, used for the status indicator)
+  const { data: healthData } = useGcpHealth(60_000, realMode);
+  const gcpCircuitOpen = healthData?.gcp.gcp_circuit_state === 'OPEN';
+
+  // Backend overview data, then real-mode sanitisation so demo numbers never leak.
+  const overviewSections = useMemo(
+    () => applyOverviewToSections(sections, overviewResult.data),
+    [overviewResult.data],
+  );
   const scopedResources = useMemo(() => getScopedResources(environment, service, search), [environment, service, search]);
+  const realSections = useMemo(
+    () => (realMode ? sanitizeRealSections(overviewSections) : overviewSections),
+    [overviewSections, realMode],
+  );
   const visibleSections = useMemo(
-    () => sections.map((section) => getScopedSection(section, service, scopedResources)).filter((section): section is SectionData => section !== null),
-    [service, scopedResources],
+    () => (realMode
+      ? realSections.map((section) => getRealScopedSection(section, service, search))
+      : realSections.map((section) => getScopedSection(section, service, scopedResources))
+    ).filter((section): section is SectionData => section !== null),
+    [realMode, realSections, service, search, scopedResources],
   );
   const active = visibleSections.find((section) => section.id === activeSection) ?? visibleSections[0];
   const selectedResources = useMemo(() => getScopedResources(environment, service, search), [environment, service, search]);
-  const currentSeries = active?.series.map((entry) => {
-    const adjusted = entry.values.map((value) => {
-      const envScale = environment === 'Produção' ? 1 : environment === 'Homologação' ? 0.58 : 0.31;
-      const resourceScale = Math.max(0.42, Math.min(1.2, selectedResources.length / 5));
-      return Number((value * envScale * resourceScale).toFixed(2));
+  const realResourceCount = useMemo(() => {
+    const names = new Set<string>();
+    overviewSections.forEach((section) => {
+      section.metrics.forEach((metric) => {
+        if (!metric.isLive) return;
+        metric.resources.forEach((resource) => names.add(resource.name));
+      });
     });
-    const view = generateHourlySeries(period, adjusted);
-    return { name: entry.name, values: view.values, color: entry.color };
-  }) ?? [];
-  const chartLabels = active ? generateHourlySeries(period, active.series[0].values).labels : [];
+    return names.size;
+  }, [overviewSections]);
+  const resourceCount = realMode ? realResourceCount : selectedResources.length;
+  const platformAvailability = realMode
+    ? getOverviewAvailability(overviewResult.data) ?? UNAVAILABLE
+    : getOverviewAvailability(overviewResult.data) ?? '99.96%';
+  const availabilityChange = realMode
+    ? getOverviewAvailabilityChange(overviewResult.data) ?? '—'
+    : '+0.03%';
+
+  // Per-statistic provenance: live GCP > Redis cache > backend API > unavailable.
+  const liveHasSeries = Boolean(liveResult.data) && Object.values(liveResult.data?.metrics ?? {}).some(
+    (value) => Array.isArray(value) && value.length > 0,
+  );
+  const overviewSource: DataSource = !realMode
+    ? 'mock'
+    : overviewResult.data
+      ? 'api'
+      : 'offline';
+
+  function sourceForMetric(sectionId: string, metric: Metric): DataSource {
+    if (!realMode) return 'mock';
+    if (sectionId === activeSection && liveHasSeries && metric.isLive) {
+      return liveResult.data?.data_source === 'cache' ? 'cache' : 'live';
+    }
+    if (metric.isLive) return 'api';
+    return 'offline';
+  }
+
+  // Build chart series: live GCP, then real overview, then zeros — never mock in real mode.
+  const liveSeries = active ? buildLiveSeries(liveResult, active, period) : null;
+  const overviewSeries = active ? buildOverviewSeries(active, overviewResult.data) : null;
+  const zeroSeries = active
+    ? active.series.map((entry) => ({ ...entry, values: entry.values.map(() => 0) }))
+    : [];
+  const currentSeries = liveSeries ?? (realMode
+    ? (overviewSeries ?? zeroSeries)
+    : (overviewSeries ?? (active?.series.map((entry) => {
+      const adjusted = entry.values.map((value) => {
+        const envScale = environment === 'Produção' ? 1 : environment === 'Homologação' ? 0.58 : 0.31;
+        const resourceScale = Math.max(0.42, Math.min(1.2, selectedResources.length / 5));
+        return Number((value * envScale * resourceScale).toFixed(2));
+      });
+      const view = generateHourlySeries(period, adjusted);
+      return { name: entry.name, values: view.values, color: entry.color };
+    }) ?? [])));
+
+  const chartLabels = active?.series[0] ? generateHourlySeries(period, active.series[0].values).labels : [];
   const alertCount = visibleSections.reduce((count, section) => count + section.metrics.filter((metric) => metric.severity).length, 0);
   const highPriority = visibleSections.flatMap((section) => section.metrics.filter((metric) => metric.severity === 'critical').map((item) => ({ ...item, section: section.title }))).slice(0, 2);
 
   const hasCriticalSignals = visibleSections.some((section) => section.metrics.some((metric) => metric.severity === 'critical'));
-  const systemStatus = hasCriticalSignals ? 'Atenção necessária' : alertCount > 0 ? 'Avisos ativos' : 'Sistemas normais';
+  const hasRealData = Boolean(overviewResult.data) || liveHasSeries;
+  const systemStatus = !realMode
+    ? 'Modo demonstração'
+    : !hasRealData
+      ? 'Sem dados reais'
+      : !overviewResult.data
+        ? 'Dados parciais'
+        : gcpCircuitOpen
+          ? 'GCP API limitada'
+          : hasCriticalSignals ? 'Atenção necessária' : alertCount > 0 ? 'Avisos ativos' : 'Sistemas normais';
+  const statusColor = !realMode || !hasRealData ? 'bg-[#bd493c]' : !overviewResult.data ? 'bg-[#bd8b2c]' : gcpCircuitOpen ? 'bg-[#bd493c]' : hasCriticalSignals ? 'bg-[#bd493c]' : alertCount > 0 ? 'bg-[#bd8b2c]' : 'bg-[#4c9467]';
+  const statusTextColor = !realMode || !hasRealData ? 'text-[#a83c30]' : !overviewResult.data ? 'text-[#916315]' : gcpCircuitOpen ? 'text-[#a83c30]' : hasCriticalSignals ? 'text-[#a83c30]' : alertCount > 0 ? 'text-[#916315]' : 'text-[#5e7165]';
+
   const initials = (user?.name ?? 'CC')
     .split(' ')
     .filter(Boolean)
@@ -95,6 +367,15 @@ function Dashboard() {
   function handleSignOut() {
     signOut();
     navigate('/login', { replace: true });
+  }
+
+  function handleDataModeChange(mode: DataMode) {
+    setDataMode(mode);
+    try {
+      window.localStorage.setItem(DATA_MODE_KEY, mode);
+    } catch {
+      // Persisting the preference is best-effort.
+    }
   }
 
   return (
@@ -115,9 +396,33 @@ function Dashboard() {
               </div>
             </div>
             <div className="flex items-center gap-2.5">
+              <div
+                className="flex shrink-0 items-center rounded-md border border-[#dfe7e1] bg-[#fafcfb] p-0.5"
+                data-testid="data-mode-toggle"
+                title="Alternar entre dados reais e demonstração"
+              >
+                <button
+                  type="button"
+                  onClick={() => handleDataModeChange('real')}
+                  aria-pressed={realMode}
+                  data-testid="button-data-mode-real"
+                  className={`h-7 rounded px-2.5 text-[10px] font-semibold transition-colors ${realMode ? 'bg-[#e8f2ec] text-[#1f694b] shadow-sm' : 'text-[#7c8981] hover:bg-[#f2f6f3]'}`}
+                >
+                  Real
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleDataModeChange('mock')}
+                  aria-pressed={!realMode}
+                  data-testid="button-data-mode-mock"
+                  className={`h-7 rounded px-2.5 text-[10px] font-semibold transition-colors ${!realMode ? 'bg-[#fff1ef] text-[#a83c30] shadow-sm' : 'text-[#7c8981] hover:bg-[#f2f6f3]'}`}
+                >
+                  Mock
+                </button>
+              </div>
               <div className="hidden items-center gap-1.5 rounded-full border border-[#e2e9e4] bg-[#fafcfb] px-2.5 py-1.5 sm:flex">
-                <span className={`h-2 w-2 rounded-full ${hasCriticalSignals ? 'bg-[#bd493c]' : alertCount > 0 ? 'bg-[#bd8b2c]' : 'bg-[#4c9467]'}`} />
-                <span className={`text-[10px] font-semibold ${hasCriticalSignals ? 'text-[#a83c30]' : alertCount > 0 ? 'text-[#916315]' : 'text-[#5e7165]'}`}>{systemStatus}</span>
+                <span className={`h-2 w-2 rounded-full ${statusColor}`} />
+                <span className={`text-[10px] font-semibold ${statusTextColor}`}>{systemStatus}</span>
               </div>
               <Button variant="ghost" size="icon" data-testid="button-notifications" className="relative h-9 w-9 text-[#69796f] hover:bg-[#f0f5f1]">
                 <Bell className="h-[17px] w-[17px]" />
@@ -149,7 +454,7 @@ function Dashboard() {
             <div className="flex items-center justify-between gap-4 md:justify-end">
               <div className="text-left md:text-right">
                 <div className="font-mono text-[10px] uppercase tracking-[.11em] text-[#99a49d]">Fonte de dados</div>
-                <div className="mt-1 flex items-center gap-1.5 text-[11px] font-medium text-[#596a60] md:justify-end"><span className="h-1.5 w-1.5 rounded-full bg-[#4a9867]" />Dados de demonstração</div>
+                <DataSourceBadge overviewResult={overviewResult} liveResult={liveResult} dataMode={dataMode} />
               </div>
             </div>
           </section>
@@ -159,8 +464,12 @@ function Dashboard() {
               <CardContent className="flex items-center justify-between gap-3 p-4">
                 <div className="flex items-center gap-3">
                   <span className="flex h-9 w-9 items-center justify-center rounded-md bg-white text-[#347953]"><CheckCircle2 className="h-[17px] w-[17px]" /></span>
-                  <div><div className="text-[10px] font-bold uppercase tracking-[.11em] text-[#658071]">Disponibilidade da plataforma</div><div className="mt-1 font-mono text-[20px] font-medium tracking-[-.04em] text-[#244b37]" data-testid="value-fleet-availability">99.96%</div></div>
-                </div><span className="font-mono text-[10px] text-[#4b8a66]">+0.03%</span>
+                  <div><div className="text-[10px] font-bold uppercase tracking-[.11em] text-[#658071]">Disponibilidade da plataforma</div><div className="mt-1 font-mono text-[20px] font-medium tracking-[-.04em] text-[#244b37]" data-testid="value-fleet-availability">{platformAvailability}</div></div>
+                </div>
+                <div className="flex shrink-0 items-center gap-2">
+                  <span className="font-mono text-[10px] text-[#4b8a66]">{availabilityChange}</span>
+                  <SourceDot source={overviewSource} />
+                </div>
               </CardContent>
             </Card>
             <Card className="rounded-lg border-[#e4e9e5] bg-white shadow-none">
@@ -168,7 +477,11 @@ function Dashboard() {
                 <div className="flex items-center gap-3">
                   <span className="flex h-9 w-9 items-center justify-center rounded-md bg-[#f5f7f5] text-[#62736a]"><Cpu className="h-[17px] w-[17px]" /></span>
                   <div><div className="text-[10px] font-bold uppercase tracking-[.11em] text-[#7e8a82]">Recursos no escopo</div><div className="mt-1 font-mono text-[20px] font-medium tracking-[-.04em] text-[#26382e]" data-testid="value-resource-count">{selectedResources.length}<span className="ml-1.5 text-[11px] text-[#86938b]">de 8</span></div></div>
-                </div><span className="text-[10px] text-[#96a19a]">{environment}</span>
+                </div>
+                <div className="flex shrink-0 items-center gap-2">
+                  <span className="text-[10px] text-[#96a19a]">{environment}</span>
+                  <SourceDot source="mock" />
+                </div>
               </CardContent>
             </Card>
             <Card className="rounded-lg border-[#e4e9e5] bg-white shadow-none">
@@ -176,7 +489,11 @@ function Dashboard() {
                 <div className="flex items-center gap-3">
                   <span className="flex h-9 w-9 items-center justify-center rounded-md bg-[#fff7e8] text-[#ad7921]"><Activity className="h-[17px] w-[17px]" /></span>
                   <div><div className="text-[10px] font-bold uppercase tracking-[.11em] text-[#7e8a82]">Sinais ativos</div><div className="mt-1 font-mono text-[20px] font-medium tracking-[-.04em] text-[#26382e]" data-testid="value-active-signals">{alertCount}<span className="ml-1.5 text-[11px] text-[#86938b]">para revisar</span></div></div>
-                </div><Badge className="rounded-sm border border-[#f0dfbd] bg-[#fff8e9] px-1.5 text-[9px] font-bold uppercase tracking-wide text-[#966c24] hover:bg-[#fff8e9]">Atenção</Badge>
+                </div>
+                <div className="flex shrink-0 items-center gap-2">
+                  <Badge className="rounded-sm border border-[#f0dfbd] bg-[#fff8e9] px-1.5 text-[9px] font-bold uppercase tracking-wide text-[#966c24] hover:bg-[#fff8e9]">Atenção</Badge>
+                  <SourceDot source={overviewSource} />
+                </div>
               </CardContent>
             </Card>
           </section>
@@ -206,7 +523,7 @@ function Dashboard() {
                     {section.metrics.length > 0 ? (
                       <div className="grid grid-cols-1 gap-3 pb-5 sm:grid-cols-2 xl:grid-cols-3">
                         {section.metrics.map((item) => (
-                          <MetricCard key={item.id} metric={item} period={period} multiplier={environment === 'Produção' ? 1 : environment === 'Homologação' ? 0.64 : 0.37} onSelect={setSelectedMetric} />
+                          <MetricCard key={item.id} metric={item} period={period} multiplier={environment === 'Produção' ? 1 : environment === 'Homologação' ? 0.64 : 0.37} onSelect={setSelectedMetric} dataSource={sourceForMetric(section.id, item)} />
                         ))}
                       </div>
                     ) : (
@@ -221,7 +538,16 @@ function Dashboard() {
                       <Card className="min-w-0 max-w-full overflow-hidden rounded-lg border-[#e2e9e4] shadow-none">
                         <CardContent className="min-w-0 max-w-full overflow-hidden p-4 md:p-5">
                           <div className="mb-2 flex items-start justify-between gap-3">
-                            <div><h3 className="text-[12px] font-bold text-[#33473b]">Atividade dos recursos</h3><p className="mt-1 text-[10px] text-[#8a968f]">Sinal por hora · janela de {period}</p></div>
+                            <div>
+                              <h3 className="text-[12px] font-bold text-[#33473b]">Atividade dos recursos</h3>
+                              <p className="mt-1 text-[10px] text-[#8a968f]">
+                                {active?.id === section.id && liveResult.data && !liveResult.error && liveSeries
+                                  ? 'Dados ao vivo · GCP Monitoring'
+                                  : overviewResult.data
+                                    ? `Dados da API · janela de ${period}`
+                                    : `Sinal por hora · janela de ${period}`}
+                              </p>
+                            </div>
                             <div className="flex flex-wrap justify-end gap-x-3 gap-y-1">
                               {currentSeries.map((line) => <span key={line.name} className="inline-flex items-center gap-1.5 text-[9px] text-[#75827a]"><i className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: line.color ?? '#216b4e' }} />{line.name}</span>)}
                             </div>
@@ -229,7 +555,7 @@ function Dashboard() {
                           <div className="w-full min-w-0 max-w-full overflow-hidden">
                             {active?.id === section.id && (
                               <ApexChart
-                                key={`${section.id}-${period}`}
+                                key={`${section.id}-${period}-${liveResult.data ? 'live' : 'mock'}`}
                                 labels={chartLabels}
                                 series={currentSeries}
                                 type={section.id === 'storage' ? 'bar' : 'area'}
@@ -273,7 +599,7 @@ function Dashboard() {
               </Tabs>
             </div>
             <div className="flex flex-col gap-2 border-t border-[#edf1ee] bg-[#fbfcfb] px-4 py-3 text-[9px] text-[#89958d] sm:flex-row sm:items-center sm:justify-between md:px-7">
-              <div className="flex items-center gap-2"><span className="font-mono font-medium tracking-wide text-[#718077]">CCD-SB100</span><span className="h-3 w-px bg-[#dce5df]" /><span>Métricas são amostras operacionais de demonstração</span></div>
+              <div className="flex items-center gap-2"><span className="font-mono font-medium tracking-wide text-[#718077]">CCD-SB100</span><span className="h-3 w-px bg-[#dce5df]" /><span>{!realMode ? 'Modo demonstração · dados mock locais' : liveResult.data && !liveResult.error ? 'Métricas em tempo real · GCP Cloud Monitoring API v3' : overviewResult.data ? 'Métricas agregadas · API /api/v1/metrics/overview' : 'Métricas são amostras operacionais de demonstração'}</span></div>
               <div className="flex items-center gap-2"><span>{selectedResources.length} recursos no escopo</span><span className="h-1 w-1 rounded-full bg-[#b8c2bb]" /><span className="font-mono">Amostra de {period}</span></div>
             </div>
           </div>

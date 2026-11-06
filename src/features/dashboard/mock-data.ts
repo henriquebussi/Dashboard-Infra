@@ -13,6 +13,8 @@ export type Metric = {
   description: string;
   resources: { name: string; value: string; detail: string; severity?: 'warning' | 'critical' }[];
   series: number[];
+  /** True when the metric was populated by the backend API. */
+  isLive?: boolean;
 };
 
 export type SectionData = {
