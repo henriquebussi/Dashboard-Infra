@@ -528,7 +528,7 @@ class GCPMonitoringService:
                 points = []
                 raw_values: List[float] = []
                 for point in ts.points:
-                    dt = point.interval.end_time.ToDatetime(tzinfo=timezone.utc)
+                    dt = point.interval.end_time.todatetime(tzinfo=timezone.utc)
                     val_type = ts.value_type.name  # e.g. "DOUBLE", "INT64"
                     if val_type == "INT64":
                         val = float(point.value.int64_value)
