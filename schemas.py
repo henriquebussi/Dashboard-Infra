@@ -249,6 +249,10 @@ class ResourceBreakdownItem(BaseModel):
         min_length=1,
         description="Target GCP resource name or identifier (e.g. 'orders-primary')",
     )
+    region: Optional[str] = Field(
+        default=None,
+        description="GCP region or zone where the resource is deployed (e.g. 'us-central1')",
+    )
     value: Union[float, str] = Field(
         ...,
         description="Resource-level metric value (numeric scalar or formatted string)",
@@ -260,6 +264,14 @@ class ResourceBreakdownItem(BaseModel):
     severity: Optional[AlertSeverity] = Field(
         default=None,
         description="Resource-level alert status if exceeding thresholds",
+    )
+    labels: Dict[str, str] = Field(
+        default_factory=dict,
+        description="GCP metric or resource labels identifying this resource instance",
+    )
+    series: List[float] = Field(
+        default_factory=list,
+        description="Chronological time-series values specifically for this resource",
     )
 
 
@@ -318,6 +330,30 @@ class MetricReading(BaseModel):
         default_factory=list,
         description="Resource-level breakdown items contributing to this metric",
     )
+    available: bool = Field(
+        default=True,
+        description="Whether this metric was successfully retrieved from real GCP infrastructure",
+    )
+    source: str = Field(
+        default="gcp",
+        description="Data provenance source: 'gcp', 'cache', 'demo', 'unavailable', 'estimated'",
+    )
+    reason: Optional[str] = Field(
+        default=None,
+        description="Human-readable explanation if metric is unavailable or estimated",
+    )
+    bucket_seconds: Optional[int] = Field(
+        default=None,
+        description="Bucket alignment period in seconds used for aggregation",
+    )
+    gcp_metric_types: List[str] = Field(
+        default_factory=list,
+        description="GCP Cloud Monitoring metric types queried for this reading",
+    )
+    timestamps: List[str] = Field(
+        default_factory=list,
+        description="Chronological ISO UTC timestamp strings matching time-series points",
+    )
     metadata: Dict[str, Any] = Field(
         default_factory=dict,
         description="Flexible auxiliary metadata (e.g. model costs, regional splits)",
@@ -367,6 +403,8 @@ class MetricReading(BaseModel):
     def compute_time_series_statistics(self) -> Self:
         """Derives statistical summaries and trajectory direction from time-series points."""
         if self.time_series:
+            if not self.timestamps:
+                self.timestamps = [p.timestamp.isoformat() for p in self.time_series]
             points = [p.value for p in self.time_series]
             if self.min_value is None:
                 self.min_value = round(min(points), 4)
@@ -765,6 +803,14 @@ class DashboardFilterParams(BaseModel):
         default=None,
         description="Explicit UTC window end timestamp when time_period is 'custom'",
     )
+    bucket: Optional[str] = Field(
+        default=None,
+        description="Explicit alignment bucket override ('auto', '1m', '5m', '15m', '1h', '6h' or seconds)",
+    )
+    source: Optional[str] = Field(
+        default=None,
+        description="Mode override: 'demo' for mock mode, 'gcp' or omitted for live GCP mode",
+    )
 
     @field_validator("environment", mode="before")
     @classmethod
@@ -1141,6 +1187,14 @@ class GcpResourceMetadata(BaseModel):
         ...,
         description="Functional category: Database, Cloud, Storage, Processing, Token Usage, SLA",
     )
+    labels: Dict[str, str] = Field(
+        default_factory=dict,
+        description="Key-value resource labels extracted from GCP time-series",
+    )
+    metric_count: int = Field(
+        default=0,
+        description="Number of metric series associated with this resource",
+    )
 
 
 class DashboardMetricsPayload(BaseModel):
@@ -1184,6 +1238,26 @@ class DashboardMetricsPayload(BaseModel):
     active_alerts: List[AlertRule] = Field(
         default_factory=list,
         description="Active alerts requiring engineering or FinOps team attention",
+    )
+    data_source: str = Field(
+        default="gcp",
+        description="Data provenance source ('gcp', 'cache', 'demo', 'unavailable', 'estimated')",
+    )
+    generated_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc),
+        description="UTC timestamp when the payload was generated",
+    )
+    bucket_seconds: int = Field(
+        default=60,
+        description="Bucket alignment period in seconds used across telemetry series",
+    )
+    environment_scope: Optional[str] = Field(
+        default=None,
+        description="Environment scoping mechanism: 'single-project', 'project-mapped', or 'label-filtered'",
+    )
+    warnings: List[str] = Field(
+        default_factory=list,
+        description="Operational notices or degraded state reasons",
     )
 
     @property

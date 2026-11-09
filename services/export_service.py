@@ -82,6 +82,9 @@ def _extract_metric_rows(payload: DashboardMetricsPayload) -> List[Dict[str, Any
                             if field_val.change_percentage is not None
                             else "N/A"
                         ),
+                        "source": getattr(field_val, "source", "gcp"),
+                        "available": "Sim" if getattr(field_val, "available", True) else "Não",
+                        "reason": getattr(field_val, "reason", "") or "",
                     }
                 )
 
@@ -107,12 +110,26 @@ def to_csv_bytes(payload: DashboardMetricsPayload) -> bytes:
     writer.writerow(["# Environment", payload.filter_params.environment.value])
     writer.writerow(["# Time Period", payload.filter_params.time_period.value])
     writer.writerow(["# Overall Status", payload.aggregate_status.value])
+    writer.writerow(["# Data Source", getattr(payload, "data_source", "gcp")])
+    if getattr(payload, "environment_scope", None):
+        writer.writerow(["# Environment Scope", payload.environment_scope])
     writer.writerow([])
 
     # Metrics section
     writer.writerow(["--- METRIC READINGS SUMMARY ---"])
     writer.writerow(
-        ["Category", "Metric Name", "Metric Key", "Current Value", "Unit", "Status", "24h Change"]
+        [
+            "Category",
+            "Metric Name",
+            "Metric Key",
+            "Current Value",
+            "Unit",
+            "Status",
+            "Change",
+            "Source",
+            "Available",
+            "Reason",
+        ]
     )
 
     rows = _extract_metric_rows(payload)
@@ -126,6 +143,9 @@ def to_csv_bytes(payload: DashboardMetricsPayload) -> bytes:
                 r["unit"],
                 r["status"],
                 r["change_pct"],
+                r["source"],
+                r["available"],
+                r["reason"],
             ]
         )
 
@@ -239,9 +259,9 @@ def to_excel_bytes(payload: DashboardMetricsPayload) -> bytes:
     ws_ov.append([])
 
     # All metrics rollup table
-    ws_ov.append(["Category", "Metric Name", "Current Value", "Unit", "Status", "24h Change"])
+    ws_ov.append(["Category", "Metric Name", "Current Value", "Unit", "Status", "24h Change", "Source", "Available", "Reason"])
     header_row_ov = ws_ov.max_row
-    for col_idx in range(1, 7):
+    for col_idx in range(1, 10):
         cell = ws_ov.cell(header_row_ov, col_idx)
         cell.font = header_font
         cell.fill = navy_fill
@@ -249,9 +269,19 @@ def to_excel_bytes(payload: DashboardMetricsPayload) -> bytes:
 
     all_rows = _extract_metric_rows(payload)
     for idx, r in enumerate(all_rows):
-        ws_ov.append([r["category"], r["metric"], r["current_value"], r["unit"], r["status"], r["change_pct"]])
+        ws_ov.append([
+            r["category"],
+            r["metric"],
+            r["current_value"],
+            r["unit"],
+            r["status"],
+            r["change_pct"],
+            r["source"],
+            r["available"],
+            r["reason"],
+        ])
         curr_row = ws_ov.max_row
-        for col_idx in range(1, 7):
+        for col_idx in range(1, 10):
             c = ws_ov.cell(curr_row, col_idx)
             c.font = regular_font
             c.border = thin_border
@@ -285,9 +315,9 @@ def to_excel_bytes(payload: DashboardMetricsPayload) -> bytes:
         ws.cell(2, 1).font = bold_cell_font
         ws.append([])
 
-        ws.append(["Metric Name", "Value", "Unit", "Status", "24h Trend / Change"])
+        ws.append(["Metric Name", "Value", "Unit", "Status", "24h Trend / Change", "Source", "Available", "Reason"])
         cat_hdr_row = ws.max_row
-        for col in range(1, 6):
+        for col in range(1, 9):
             cell = ws.cell(cat_hdr_row, col)
             cell.font = header_font
             cell.fill = dark_header_fill
@@ -298,10 +328,13 @@ def to_excel_bytes(payload: DashboardMetricsPayload) -> bytes:
                 status_str = f_val.status.value if hasattr(f_val.status, "value") else str(f_val.status)
                 chg = f"{f_val.change_percentage:+.1f}%" if f_val.change_percentage is not None else "0.0%"
                 unit_str = f_val.unit.value if hasattr(f_val.unit, "value") else str(f_val.unit)
+                src = getattr(f_val, "source", "gcp")
+                avail = "Sim" if getattr(f_val, "available", True) else "Não"
+                rsn = getattr(f_val, "reason", "") or ""
 
-                ws.append([f_name.replace("_", " ").title(), f_val.current_value, unit_str, status_str, chg])
+                ws.append([f_name.replace("_", " ").title(), f_val.current_value, unit_str, status_str, chg, src, avail, rsn])
                 r_num = ws.max_row
-                for col in range(1, 6):
+                for col in range(1, 9):
                     c = ws.cell(r_num, col)
                     c.font = regular_font
                     c.border = thin_border
@@ -545,7 +578,8 @@ def to_pdf_bytes(payload: DashboardMetricsPayload) -> bytes:
             Paragraph("<b>Value</b>", cell_bold),
             Paragraph("<b>Unit</b>", cell_bold),
             Paragraph("<b>Status</b>", cell_bold),
-            Paragraph("<b>24h Chg</b>", cell_bold),
+            Paragraph("<b>Change</b>", cell_bold),
+            Paragraph("<b>Source</b>", cell_bold),
         ]
     ]
 
@@ -562,10 +596,11 @@ def to_pdf_bytes(payload: DashboardMetricsPayload) -> bytes:
                 Paragraph(m["unit"], cell_body),
                 Paragraph(f"<font color='{st_color}'><b>{st}</b></font>", cell_bold),
                 Paragraph(m["change_pct"], cell_body),
+                Paragraph(m["source"], cell_body),
             ]
         )
 
-    metric_table = Table(metric_rows, colWidths=[100, 150, 70, 70, 80, 70])
+    metric_table = Table(metric_rows, colWidths=[80, 130, 60, 60, 70, 60, 80])
     metric_table.setStyle(
         TableStyle(
             [

@@ -93,6 +93,7 @@ function formatSeconds(value: number): string {
 
 /** Format a backend reading using its engineering/financial unit. */
 export function formatMetricValue(reading: MetricReadingDto): string {
+  if (reading.available === false) return 'Indisponível';
   const value = reading.current_value;
   switch (reading.unit) {
     case '%': {
@@ -136,6 +137,7 @@ export function formatMetricValue(reading: MetricReadingDto): string {
 }
 
 export function formatChange(reading: MetricReadingDto): string {
+  if (reading.available === false) return '—';
   const change = reading.change_percentage;
   if (change === null || change === undefined || Number.isNaN(change)) return '0%';
   const sign = change > 0 ? '+' : change < 0 ? '−' : '';
@@ -180,12 +182,31 @@ function normalizeReading(raw: unknown): MetricReadingDto | null {
     min_value: typeof candidate.min_value === 'number' ? candidate.min_value : null,
     max_value: typeof candidate.max_value === 'number' ? candidate.max_value : null,
     avg_value: typeof candidate.avg_value === 'number' ? candidate.avg_value : null,
+    available: candidate.available !== false,
+    source: candidate.source ?? 'gcp',
+    reason: candidate.reason ?? null,
+    bucket_seconds: candidate.bucket_seconds ?? null,
+    gcp_metric_types: Array.isArray(candidate.gcp_metric_types) ? candidate.gcp_metric_types : [],
+    timestamps: Array.isArray(candidate.timestamps) ? candidate.timestamps : [],
     resources: Array.isArray(candidate.resources) ? candidate.resources : [],
     metadata:
       candidate.metadata && typeof candidate.metadata === 'object'
         ? (candidate.metadata as Record<string, unknown>)
         : {},
   };
+}
+
+/** Format an ISO UTC timestamp for chart axes (e.g. '14:30' or '08/11 14:30'). */
+export function formatTimestampLabel(isoString: string): string {
+  try {
+    const dt = new Date(isoString);
+    if (Number.isNaN(dt.getTime())) return isoString;
+    const hours = String(dt.getUTCHours()).padStart(2, '0');
+    const minutes = String(dt.getUTCMinutes()).padStart(2, '0');
+    return `${hours}:${minutes}`;
+  } catch {
+    return isoString;
+  }
 }
 
 /** Read a metric field from the overview payload by section + backend field name. */
@@ -211,19 +232,27 @@ export function getMetricReading(
 }
 
 /**
- * Build the section-level chart series from real backend readings.
- * Returns ``null`` when the overview has no usable time-series for the section.
+ * Build the section-level chart series and exact timestamp labels from backend readings.
  */
-export function buildOverviewSeries(
+export function buildOverviewChart(
   section: SectionData,
   overview: OverviewResponse | null,
-): SectionData['series'] | null {
+): { labels: string[]; series: SectionData['series'] } | null {
   if (!overview) return null;
+
+  let commonTimestamps: string[] = [];
 
   const series = (SERIES_KEYS[section.id] ?? [])
     .map((key, index) => {
       const reading = getCategoryReading(overview, section.id, key);
       if (!reading || reading.time_series.length === 0) return null;
+
+      if (commonTimestamps.length === 0 && reading.timestamps && reading.timestamps.length > 0) {
+        commonTimestamps = reading.timestamps;
+      } else if (commonTimestamps.length === 0 && reading.time_series.length > 0) {
+        commonTimestamps = reading.time_series.map((p) => p.timestamp);
+      }
+
       const mockEntry = section.series[index];
       return {
         name: mockEntry?.name ?? key,
@@ -233,7 +262,22 @@ export function buildOverviewSeries(
     })
     .filter((entry): entry is NonNullable<typeof entry> => entry !== null);
 
-  return series.length > 0 ? series : null;
+  if (series.length === 0) return null;
+
+  const labels = commonTimestamps.map(formatTimestampLabel);
+  return { labels, series };
+}
+
+/**
+ * Build the section-level chart series from real backend readings.
+ * Returns ``null`` when the overview has no usable time-series for the section.
+ */
+export function buildOverviewSeries(
+  section: SectionData,
+  overview: OverviewResponse | null,
+): SectionData['series'] | null {
+  const chart = buildOverviewChart(section, overview);
+  return chart?.series ?? null;
 }
 
 /**
@@ -255,27 +299,33 @@ export function applyOverviewToSections(
         (item) => item.metric_id === `${section.id}.${METRIC_KEYS[section.id]?.[metric.id]}`,
       );
 
+      const isAvailable = reading.available !== false;
+
       return {
         ...metric,
-        value: formatMetricValue(reading),
-        change: formatChange(reading),
-        trend: trendOf(reading),
-        severity: severityOf(reading),
-        action: alert?.suggested_action ?? metric.action,
+        value: isAvailable ? formatMetricValue(reading) : 'Indisponível',
+        change: isAvailable ? formatChange(reading) : '—',
+        trend: isAvailable ? trendOf(reading) : 'flat',
+        severity: isAvailable ? severityOf(reading) : undefined,
+        action: alert?.suggested_action ?? (isAvailable ? metric.action : undefined),
         isLive: true,
+        available: isAvailable,
+        source: reading.source ?? 'gcp',
+        reason: reading.reason ?? null,
+        timestamps: reading.timestamps,
         series:
           reading.time_series.length > 0
             ? reading.time_series.map((point) => point.value)
-            : metric.series,
+            : (isAvailable ? metric.series : metric.series.map(() => 0)),
         resources:
           reading.resources.length > 0
             ? reading.resources.map((resource) => ({
                 name: resource.name,
                 value: String(resource.value),
-                detail: resource.detail ?? '',
+                detail: resource.detail ?? (resource.region ? `${resource.region}` : ''),
                 severity: resource.severity ?? undefined,
               }))
-            : metric.resources,
+            : [],
       } satisfies Metric;
     });
 

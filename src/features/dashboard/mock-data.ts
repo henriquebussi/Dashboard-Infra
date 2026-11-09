@@ -1,4 +1,4 @@
-export type Period = '24h' | '7d' | '30d';
+export type Period = '1h' | '24h' | '7d' | '30d';
 export type Environment = 'Produção' | 'Homologação' | 'Desenvolvimento';
 
 export type Metric = {
@@ -13,8 +13,12 @@ export type Metric = {
   description: string;
   resources: { name: string; value: string; detail: string; severity?: 'warning' | 'critical' }[];
   series: number[];
+  timestamps?: string[];
   /** True when the metric was populated by the backend API. */
   isLive?: boolean;
+  available?: boolean;
+  source?: 'gcp' | 'cache' | 'demo' | 'unavailable' | 'estimated';
+  reason?: string | null;
 };
 
 export type SectionData = {
@@ -161,17 +165,21 @@ export const resources = [
 ] as const;
 
 export const generateHourlySeries = (period: Period, points: number[]) => {
-  const count = period === '24h' ? 24 : period === '7d' ? 28 : 30;
-  const labels = period === '24h'
+  const count = period === '1h' ? 12 : period === '24h' ? 24 : period === '7d' ? 28 : 30;
+  const labels = period === '1h'
+    ? Array.from({ length: 12 }, (_, i) => `${i * 5}m`)
+    : period === '24h'
     ? Array.from({ length: 24 }, (_, i) => `${String((i + 1) % 24).padStart(2, '0')}:00`)
-    : Array.from({ length: count }, (_, i) => period === '7d' ? `D${Math.floor(i / 4) + 1}` : `D${i + 1}`);
-  const values = period === '24h'
+    : Array.from({ length: count }, (_, i) => (period === '7d' ? `D${Math.floor(i / 4) + 1}` : `D${i + 1}`));
+  const values = period === '24h' && points.length === 24
     ? points
     : Array.from({ length: count }, (_, i) => {
-      const start = Math.floor(i * points.length / count);
-      const end = Math.max(start + 1, Math.floor((i + 1) * points.length / count));
+      const start = Math.floor((i * points.length) / count);
+      const end = Math.max(start + 1, Math.floor(((i + 1) * points.length) / count));
       const slice = points.slice(start, end);
-      return Number((slice.reduce((a, b) => a + b, 0) / slice.length).toFixed(2));
+      return slice.length > 0
+        ? Number((slice.reduce((a, b) => a + b, 0) / slice.length).toFixed(2))
+        : 0;
     });
   return { labels, values };
 };

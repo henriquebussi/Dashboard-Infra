@@ -13,15 +13,23 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
+  fetchErrorLogs,
   fetchGcpHealth,
   fetchGcpMetrics,
+  fetchGcpResources,
   fetchOverview,
+  fetchSlowQueries,
+  fetchTokenUsage,
   type Environment,
+  type ErrorLogResponse,
   type GcpHealthResponse,
   type GcpMetricsResponse,
+  type GcpResourceMetadata,
   type MetricCategory,
   type OverviewResponse,
   type Period,
+  type SlowQueryResponse,
+  type TokenUsageResponse,
 } from '@/lib/api';
 
 // ---------------------------------------------------------------------------
@@ -168,19 +176,109 @@ export interface UseOverviewResult extends AsyncState<OverviewResponse> {
 
 /**
  * Fetch `/api/v1/metrics/overview` for the current environment/period.
- * This endpoint is always available (no GCP credentials required), so it is
- * the dashboard's primary backend data source.
  */
 export function useOverview(
   env: Environment,
   period: Period,
+  options: { service?: string; resourceId?: string; bucket?: string; source?: string } = {},
   enabled = true,
   pollMs = 30_000,
 ): UseOverviewResult {
   return useAsyncPoll(
-    () => fetchOverview(env, period),
+    () => fetchOverview(env, period, options),
     pollMs,
-    [env, period],
+    [env, period, options.service, options.resourceId, options.bucket, options.source],
+    enabled,
+  );
+}
+
+// ---------------------------------------------------------------------------
+// useGcpResources — dynamic inventory extracted from metric labels
+// ---------------------------------------------------------------------------
+
+export interface UseGcpResourcesResult extends AsyncState<GcpResourceMetadata[]> {
+  refetch: () => void;
+}
+
+export function useGcpResources(
+  options: { env?: Environment; service?: string; search?: string } = {},
+  enabled = true,
+  pollMs = 60_000,
+): UseGcpResourcesResult {
+  return useAsyncPoll(
+    () => fetchGcpResources(options),
+    pollMs,
+    [options.env, options.service, options.search],
+    enabled,
+  );
+}
+
+// ---------------------------------------------------------------------------
+// useSlowQueries — Cloud SQL slow query logs
+// ---------------------------------------------------------------------------
+
+export interface UseSlowQueriesResult extends AsyncState<SlowQueryResponse> {
+  refetch: () => void;
+}
+
+export function useSlowQueries(
+  env: Environment,
+  options: { hours?: number; thresholdMs?: number; databaseId?: string; ttl?: number } = {},
+  enabled = true,
+  pollMs = 60_000,
+): UseSlowQueriesResult {
+  const backendEnv = envToBackend(env);
+  return useAsyncPoll(
+    () => fetchSlowQueries(backendEnv, options),
+    pollMs,
+    [backendEnv, options.hours, options.thresholdMs, options.databaseId],
+    enabled,
+  );
+}
+
+// ---------------------------------------------------------------------------
+// useGcpErrors — bounded Cloud Logging error stream
+// ---------------------------------------------------------------------------
+
+export interface UseGcpErrorsResult extends AsyncState<ErrorLogResponse> {
+  refetch: () => void;
+}
+
+export function useGcpErrors(
+  env: Environment,
+  options: { hours?: number; maxEntries?: number; serviceFilter?: string } = {},
+  enabled = true,
+  pollMs = 60_000,
+): UseGcpErrorsResult {
+  const backendEnv = envToBackend(env);
+  return useAsyncPoll(
+    () => fetchErrorLogs(backendEnv, options),
+    pollMs,
+    [backendEnv, options.hours, options.maxEntries, options.serviceFilter],
+    enabled,
+  );
+}
+
+// ---------------------------------------------------------------------------
+// useTokenUsage — Vertex AI token usage events
+// ---------------------------------------------------------------------------
+
+export interface UseTokenUsageResult extends AsyncState<TokenUsageResponse> {
+  refetch: () => void;
+}
+
+export function useTokenUsage(
+  env: Environment,
+  hours = 24,
+  ttl = 120,
+  enabled = true,
+  pollMs = 60_000,
+): UseTokenUsageResult {
+  const backendEnv = envToBackend(env);
+  return useAsyncPoll(
+    () => fetchTokenUsage(backendEnv, hours, ttl),
+    pollMs,
+    [backendEnv, hours, ttl],
     enabled,
   );
 }

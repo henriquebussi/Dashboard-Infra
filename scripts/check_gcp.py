@@ -136,20 +136,60 @@ def check_monitoring_api(project_id: str, credentials) -> bool:
             page_size=1,
         )
         next(iter(client.list_metric_descriptors(request=request, timeout=10)), None)
-        line(OK, "Cloud Monitoring API is reachable and the project has metric descriptors.")
+        line(OK, "Cloud Monitoring API is reachable and roles/monitoring.viewer is valid.")
         return True
     except PermissionDenied as exc:
-        line(ERR, f"Permission denied (403): {exc}")
-        print("       Grant the identity roles/monitoring.viewer (and roles/logging.viewer).")
+        line(ERR, f"Monitoring permission denied (403): {exc}")
+        print("       Grant the identity roles/monitoring.viewer.")
     except Forbidden as exc:
-        line(ERR, f"Forbidden (403): {exc}")
+        line(ERR, f"Monitoring forbidden (403): {exc}")
+        print("       Grant the identity roles/monitoring.viewer.")
     except NotFound as exc:
-        line(ERR, f"Project or API not found (404): {exc}")
+        line(ERR, f"Project or Monitoring API not found (404): {exc}")
         print("       Check the project ID and enable the Cloud Monitoring API.")
     except GoogleAPICallError as exc:
-        line(ERR, f"GCP API error: {type(exc).__name__}: {exc}")
+        line(ERR, f"GCP Monitoring API error: {type(exc).__name__}: {exc}")
     except Exception as exc:
         line(ERR, f"Monitoring check failed: {type(exc).__name__}: {exc}")
+    return False
+
+
+def check_logging_api(project_id: str, credentials) -> bool:
+    try:
+        from google.api_core.exceptions import (
+            Forbidden,
+            GoogleAPICallError,
+            NotFound,
+            PermissionDenied,
+        )
+        from google.cloud import logging as gcp_logging
+    except ImportError:
+        line(ERR, "google-cloud-logging is not installed. Run: pip install -r requirements.txt")
+        return False
+
+    try:
+        client = gcp_logging.Client(project=project_id, credentials=credentials)
+        iterator = client.list_entries(
+            resource_names=[f"projects/{project_id}"],
+            max_results=1,
+            page_size=1,
+        )
+        next(iter(iterator), None)
+        line(OK, "Cloud Logging API is reachable and roles/logging.viewer is valid.")
+        return True
+    except PermissionDenied as exc:
+        line(ERR, f"Logging permission denied (403): {exc}")
+        print("       Grant the identity roles/logging.viewer.")
+    except Forbidden as exc:
+        line(ERR, f"Logging forbidden (403): {exc}")
+        print("       Grant the identity roles/logging.viewer.")
+    except NotFound as exc:
+        line(ERR, f"Project or Logging API not found (404): {exc}")
+        print("       Check the project ID and enable the Cloud Logging API.")
+    except GoogleAPICallError as exc:
+        line(ERR, f"GCP Logging API error: {type(exc).__name__}: {exc}")
+    except Exception as exc:
+        line(ERR, f"Logging check failed: {type(exc).__name__}: {exc}")
     return False
 
 
@@ -165,11 +205,18 @@ def main() -> int:
         print("\nFix credentials, then run this script again.")
         return 1
 
-    ok = check_monitoring_api(project_id, credentials)
-    if not ok:
+    monitoring_ok = check_monitoring_api(project_id, credentials)
+    logging_ok = check_logging_api(project_id, credentials)
+
+    if not monitoring_ok or not logging_ok:
         print("\nAlso verify that these APIs are enabled on the project:")
         print("  - Cloud Monitoring API (monitoring.googleapis.com)")
         print("  - Cloud Logging API (logging.googleapis.com)")
+        print("\nAnd that the credentials carry:")
+        if not monitoring_ok:
+            print("  - roles/monitoring.viewer")
+        if not logging_ok:
+            print("  - roles/logging.viewer")
         return 1
 
     print("\nAll checks passed. Restart the backend and the dashboard should show live GCP data.")

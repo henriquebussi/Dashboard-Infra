@@ -21,8 +21,9 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 
-from schemas import Environment, TimePeriod, UserRBACContext, UserRole
+from schemas import Environment, GcpResourceMetadata, TimePeriod, UserRBACContext, UserRole
 from security import get_current_user, require_role
+from services.resource_inventory import resource_inventory
 
 logger = logging.getLogger("gcp_observatory.gcp_router")
 
@@ -220,6 +221,67 @@ async def get_slow_queries(
         ttl=ttl,
         **kwargs,
     )
+
+
+# ---------------------------------------------------------------------------
+# 3b. Platform Error Logs — Cloud Logging
+# ---------------------------------------------------------------------------
+
+
+@router.get(
+    "/gcp/logs/errors",
+    summary="Platform Error Logs — Cloud Logging",
+    description=(
+        "Pulls error log records (severity>=ERROR) from Cloud Logging. "
+        "Queries are strictly bounded with time-windows and max_results."
+    ),
+    response_description="Bounded error log entries with capping and estimation indicators.",
+    tags=["GCP Live Metrics"],
+)
+async def get_error_logs(
+    request: Request,
+    hours: int = Query(default=24, ge=1, le=168, description="Look-back window in hours."),
+    max_entries: int = Query(default=200, ge=1, le=1000, description="Maximum entries to return."),
+    service_filter: Optional[str] = Query(default=None, description="Optional resource filter."),
+    env: Environment = Query(default=Environment.PROD, description="Environment tier."),
+    ttl: int = Query(default=60, ge=10, le=3600, description="Redis TTL override."),
+    user: UserRBACContext = Depends(get_current_user),
+) -> Dict[str, Any]:
+    """Return bounded error log entries, served from cache when hot."""
+    gcp = _get_gcp_service(request)
+    return await gcp.get_error_logs(
+        environment=env.value,
+        hours=hours,
+        ttl=ttl,
+        max_entries=max_entries,
+        service_filter=service_filter,
+    )
+
+
+# ---------------------------------------------------------------------------
+# 3c. Discovered GCP Resources Catalog
+# ---------------------------------------------------------------------------
+
+
+@router.get(
+    "/gcp/resources",
+    response_model=List[GcpResourceMetadata],
+    summary="Discovered GCP Resources Catalog",
+    description=(
+        "Returns active GCP resources (Cloud SQL, Compute VMs, GCS Buckets, BigQuery, Vertex AI) "
+        "derived purely from Cloud Monitoring time-series metric labels. Zero admin APIs called."
+    ),
+    response_description="List of inventoried GCP resources with metadata.",
+    tags=["GCP Live Metrics"],
+)
+async def get_discovered_resources(
+    env: Optional[Environment] = Query(default=None, description="Environment tier filter."),
+    service: Optional[str] = Query(default=None, description="GCP Service filter."),
+    search: Optional[str] = Query(default=None, description="Search query across resource name/region."),
+    user: UserRBACContext = Depends(get_current_user),
+) -> List[GcpResourceMetadata]:
+    """Return list of discovered GCP resources derived dynamically from metric labels."""
+    return resource_inventory.get_resources(env=env, service=service, search=search)
 
 
 # ---------------------------------------------------------------------------

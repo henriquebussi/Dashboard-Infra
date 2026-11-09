@@ -64,6 +64,7 @@ async function apiFetch<T>(path: string, init: RequestInit = {}): Promise<T> {
 
 export type Environment = 'PROD' | 'STAGING' | 'DEV';
 export type Period = '1h' | '24h' | '7d' | '30d';
+export type Bucket = 'auto' | '1m' | '5m' | '15m' | '1h' | '6h';
 export type MetricCategory = 'cloud' | 'database' | 'storage' | 'processing' | 'tokens' | 'sla';
 
 export interface TimeSeriesPoint {
@@ -83,11 +84,20 @@ export interface MetricReadingDto {
   min_value?: number | null;
   max_value?: number | null;
   avg_value?: number | null;
+  available?: boolean;
+  source?: 'gcp' | 'cache' | 'demo' | 'unavailable' | 'estimated';
+  reason?: string | null;
+  bucket_seconds?: number | null;
+  gcp_metric_types?: string[];
+  timestamps?: string[];
   resources: Array<{
     name: string;
+    region?: string | null;
     value: string | number;
     detail?: string;
     severity?: 'warning' | 'critical' | null;
+    labels?: Record<string, string>;
+    series?: number[];
   }>;
   metadata: Record<string, unknown>;
 }
@@ -102,6 +112,16 @@ export interface MetricSeriesDto {
   aggregated_min: number;
   fetched_at: string;
   points: TimeSeriesPoint[];
+}
+
+export interface GcpResourceMetadata {
+  name: string;
+  env: Environment;
+  service: string;
+  region: string;
+  resource_type: string;
+  labels: Record<string, string>;
+  metric_count: number;
 }
 
 export interface GcpMetricsResponse {
@@ -127,6 +147,8 @@ export interface TokenUsageEntry {
 export interface TokenUsageResponse {
   query_type: 'token_usage';
   total_count: number;
+  capped?: boolean;
+  estimated?: boolean;
   fetched_at: string;
   entries: TokenUsageEntry[];
 }
@@ -143,8 +165,28 @@ export interface SlowQueryEntry {
 export interface SlowQueryResponse {
   query_type: 'slow_queries';
   total_count: number;
+  capped?: boolean;
+  estimated?: boolean;
   fetched_at: string;
   entries: SlowQueryEntry[];
+}
+
+export interface ErrorLogEntry {
+  timestamp: string | null;
+  severity: string;
+  resource_type: string | null;
+  resource_labels?: Record<string, string>;
+  message: string;
+  labels: Record<string, string>;
+}
+
+export interface ErrorLogResponse {
+  query_type: 'error_logs';
+  total_count: number;
+  capped?: boolean;
+  estimated?: boolean;
+  fetched_at: string;
+  entries: ErrorLogEntry[];
 }
 
 export interface GcpHealthResponse {
@@ -152,6 +194,12 @@ export interface GcpHealthResponse {
   gcp: {
     monitoring_sdk_available: boolean;
     logging_sdk_available: boolean;
+    monitoring_state: string;
+    logging_state: string;
+    active_project_id: string;
+    project_map: Record<string, string>;
+    environment_scope: string;
+    missing_permissions: string[];
     gcp_circuit_state: 'CLOSED' | 'OPEN' | 'HALF_OPEN';
     project_id: string;
   };
@@ -190,6 +238,8 @@ export interface OverviewResponse {
     resource: string | null;
     start_time: string | null;
     end_time: string | null;
+    bucket?: string | null;
+    source?: string | null;
   };
   database: OverviewCategory;
   cloud: OverviewCategory;
@@ -198,6 +248,11 @@ export interface OverviewResponse {
   tokens: OverviewCategory;
   sla: OverviewCategory;
   active_alerts: OverviewAlert[];
+  data_source?: 'gcp' | 'cache' | 'demo' | 'unavailable' | 'estimated';
+  generated_at?: string;
+  bucket_seconds?: number;
+  environment_scope?: string | null;
+  warnings?: string[];
 }
 
 export interface CacheFlushResponse {
@@ -222,12 +277,38 @@ export interface PrewarmResponse {
 export function fetchOverview(
   env: Environment,
   period: Period,
-  options: { service?: string; resourceId?: string } = {},
+  options: { service?: string; resourceId?: string; bucket?: string; source?: string } = {},
 ): Promise<OverviewResponse> {
   const params = new URLSearchParams({ env, period });
   if (options.service) params.set('service', options.service);
   if (options.resourceId) params.set('resource', options.resourceId);
+  if (options.bucket) params.set('bucket', options.bucket);
+  if (options.source) params.set('source', options.source);
   return apiFetch(`/metrics/overview?${params}`);
+}
+
+/** GET /api/v1/gcp/resources */
+export function fetchGcpResources(
+  options: { env?: Environment; service?: string; search?: string } = {},
+): Promise<GcpResourceMetadata[]> {
+  const params = new URLSearchParams();
+  if (options.env) params.set('env', options.env);
+  if (options.service) params.set('service', options.service);
+  if (options.search) params.set('search', options.search);
+  const q = params.toString();
+  return apiFetch(`/gcp/resources${q ? `?${q}` : ''}`);
+}
+
+/** GET /api/v1/gcp/logs/errors */
+export function fetchErrorLogs(
+  env: Environment,
+  options: { hours?: number; maxEntries?: number; serviceFilter?: string } = {},
+): Promise<ErrorLogResponse> {
+  const params = new URLSearchParams({ env });
+  if (options.hours) params.set('hours', String(options.hours));
+  if (options.maxEntries) params.set('max_entries', String(options.maxEntries));
+  if (options.serviceFilter) params.set('service_filter', options.serviceFilter);
+  return apiFetch(`/gcp/logs/errors?${params}`);
 }
 
 /** GET /api/v1/alerts/active */

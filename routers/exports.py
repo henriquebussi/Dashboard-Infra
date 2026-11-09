@@ -10,7 +10,7 @@ import io
 from datetime import datetime
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import StreamingResponse
 
 from schemas import DashboardFilterParams, Environment, TimePeriod, UserRBACContext
@@ -26,7 +26,8 @@ router = APIRouter()
     summary="Export Metrics Report",
     description=(
         "Generates and streams high-fidelity report file downloads in CSV, multi-tab Excel (XLSX), "
-        "or executive PDF summary formats, scoped by target environment and time window."
+        "or executive PDF summary formats, scoped by target environment and time window. "
+        "Produces exact same live GCP data and provenance attributes as the dashboard UI."
     ),
     responses={
         200: {
@@ -41,6 +42,7 @@ router = APIRouter()
     },
 )
 async def export_dashboard_report(
+    request: Request,
     format: ExportFormat = Query(
         default=ExportFormat.CSV,
         description="Target export file format: 'csv', 'xlsx', or 'pdf'",
@@ -72,6 +74,14 @@ async def export_dashboard_report(
         default=None,
         description="Explicit UTC window end (required for 'custom' period)",
     ),
+    bucket: Optional[str] = Query(
+        default=None,
+        description="Alignment bucket override ('auto', '1m', '5m', '15m', '1h', '6h' or seconds)",
+    ),
+    source: Optional[str] = Query(
+        default=None,
+        description="Data mode: 'demo' for mock mode, 'gcp' or omitted for live GCP",
+    ),
     user: UserRBACContext = Depends(get_current_user),
 ) -> StreamingResponse:
     """Generate and stream file download in CSV, XLSX, or PDF format."""
@@ -83,6 +93,8 @@ async def export_dashboard_report(
             resource_id=resource_id,
             start_time=start_time,
             end_time=end_time,
+            bucket=bucket,
+            source=source,
         )
     except Exception as exc:
         raise HTTPException(
@@ -90,7 +102,13 @@ async def export_dashboard_report(
             detail=f"Invalid filter parameters: {exc}",
         ) from exc
 
-    payload = metrics_store.get_overview_payload(filters)
+    gcp_service = getattr(request.app.state, "gcp_service", None)
+    if source == "demo" or gcp_service is None:
+        payload = metrics_store.get_overview_payload(filters)
+        if source == "demo":
+            payload.data_source = "demo"
+    else:
+        payload = await gcp_service.get_overview_payload(filters)
 
     try:
         file_bytes, media_type, filename = export_metrics_report(payload, format)

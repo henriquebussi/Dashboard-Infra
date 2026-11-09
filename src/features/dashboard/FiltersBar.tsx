@@ -1,11 +1,14 @@
-import { Search, SlidersHorizontal } from 'lucide-react';
+import { Clock, Search, SlidersHorizontal } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import type { Bucket } from '@/lib/api';
 import type { Environment, Period } from './mock-data';
 
 type Props = {
   period: Period;
   setPeriod: (value: Period) => void;
+  bucket?: Bucket;
+  setBucket?: (value: Bucket) => void;
   environment: Environment;
   setEnvironment: (value: Environment) => void;
   service: string;
@@ -14,7 +17,18 @@ type Props = {
   setSearch: (value: string) => void;
 };
 
-export function FiltersBar({ period, setPeriod, environment, setEnvironment, service, setService, search, setSearch }: Props) {
+export function FiltersBar({
+  period,
+  setPeriod,
+  bucket = 'auto',
+  setBucket,
+  environment,
+  setEnvironment,
+  service,
+  setService,
+  search,
+  setSearch,
+}: Props) {
   return (
     <div className="flex flex-col gap-3 border-y border-[#e5ebe7] bg-[#fbfcfb] px-4 py-3 md:flex-row md:items-center md:justify-between md:px-7">
       <div className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[.13em] text-muted-foreground">
@@ -22,23 +36,57 @@ export function FiltersBar({ period, setPeriod, environment, setEnvironment, ser
         <span>Escopo</span>
       </div>
       <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
+        {/* Period Selector including 1h */}
         <div className="inline-flex h-9 items-center rounded-md border border-[#dce5df] bg-white p-1" data-testid="filter-period">
-          {(['24h', '7d', '30d'] as Period[]).map((item) => (
-            <button key={item} onClick={() => setPeriod(item)} data-testid={`button-period-${item}`} className={`h-7 rounded px-3 text-xs font-semibold transition-colors ${period === item ? 'bg-[#e8f2ec] text-[#1f694b]' : 'text-[#65726c] hover:bg-[#f2f6f3]'}`}>
+          {(['1h', '24h', '7d', '30d'] as Period[]).map((item) => (
+            <button
+              key={item}
+              onClick={() => setPeriod(item)}
+              data-testid={`button-period-${item}`}
+              className={`h-7 rounded px-3 text-xs font-semibold transition-colors ${
+                period === item ? 'bg-[#e8f2ec] text-[#1f694b]' : 'text-[#65726c] hover:bg-[#f2f6f3]'
+              }`}
+            >
               {item}
             </button>
           ))}
         </div>
+
+        {/* Dynamic Bucket Selector */}
+        {setBucket && (
+          <Select value={bucket} onValueChange={(val: Bucket) => setBucket(val)}>
+            <SelectTrigger data-testid="select-bucket" className="h-9 w-full border-[#dce5df] bg-white text-xs sm:w-[115px]">
+              <span className="text-[#819088] mr-1">Bucket:</span>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="auto">Auto</SelectItem>
+              <SelectItem value="1m">1m</SelectItem>
+              <SelectItem value="5m">5m</SelectItem>
+              <SelectItem value="15m">15m</SelectItem>
+              <SelectItem value="1h">1h</SelectItem>
+              <SelectItem value="6h">6h</SelectItem>
+            </SelectContent>
+          </Select>
+        )}
+
+        {/* Environment Selector */}
         <Select value={environment} onValueChange={(value: Environment) => setEnvironment(value)}>
-          <SelectTrigger data-testid="select-environment" className="h-9 w-full border-[#dce5df] bg-white text-xs sm:w-[145px]"><SelectValue /></SelectTrigger>
+          <SelectTrigger data-testid="select-environment" className="h-9 w-full border-[#dce5df] bg-white text-xs sm:w-[145px]">
+            <SelectValue />
+          </SelectTrigger>
           <SelectContent>
             <SelectItem value="Produção">Produção</SelectItem>
             <SelectItem value="Homologação">Homologação</SelectItem>
             <SelectItem value="Desenvolvimento">Desenvolvimento</SelectItem>
           </SelectContent>
         </Select>
+
+        {/* Service Selector */}
         <Select value={service} onValueChange={setService}>
-          <SelectTrigger data-testid="select-service" className="h-9 w-full border-[#dce5df] bg-white text-xs sm:w-[152px]"><SelectValue /></SelectTrigger>
+          <SelectTrigger data-testid="select-service" className="h-9 w-full border-[#dce5df] bg-white text-xs sm:w-[152px]">
+            <SelectValue />
+          </SelectTrigger>
           <SelectContent>
             <SelectItem value="Todos os serviços">Todos os serviços</SelectItem>
             <SelectItem value="Cloud SQL">Cloud SQL</SelectItem>
@@ -50,9 +98,17 @@ export function FiltersBar({ period, setPeriod, environment, setEnvironment, ser
             <SelectItem value="Memorystore">Memorystore</SelectItem>
           </SelectContent>
         </Select>
+
+        {/* Search */}
         <div className="relative w-full sm:w-[210px]">
           <Search className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-[#8b9991]" />
-          <Input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Buscar um recurso…" data-testid="input-resource-search" className="h-9 border-[#dce5df] bg-white pl-9 text-xs placeholder:text-[#9aa69f]" />
+          <Input
+            value={search}
+            onChange={(event) => setSearch(event.target.value)}
+            placeholder="Buscar um recurso…"
+            data-testid="input-resource-search"
+            className="h-9 border-[#dce5df] bg-white pl-9 text-xs placeholder:text-[#9aa69f]"
+          />
         </div>
       </div>
     </div>

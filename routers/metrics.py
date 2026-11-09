@@ -14,7 +14,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 
 from schemas import (
     AlertRule,
@@ -46,11 +46,13 @@ router = APIRouter()
     summary="Get Aggregated Dashboard Metrics Overview",
     description=(
         "Retrieves the comprehensive, aggregated GCP telemetry and FinOps metrics payload "
-        "scoped by target environment, temporal window, service, or resource identifier."
+        "scoped by target environment, temporal window, service, or resource identifier. "
+        "When GCP integration is active, streams exclusively real Cloud Monitoring telemetry."
     ),
     response_description="Composite dashboard metrics and health payload.",
 )
 async def get_metrics_overview(
+    request: Request,
     period: TimePeriod = Query(
         default=TimePeriod.TWENTY_FOUR_HOURS,
         alias="period",
@@ -78,6 +80,14 @@ async def get_metrics_overview(
         default=None,
         description="UTC window end timestamp (required if period is 'custom')",
     ),
+    bucket: Optional[str] = Query(
+        default=None,
+        description="Alignment bucket override ('auto', '1m', '5m', '15m', '1h', '6h' or seconds)",
+    ),
+    source: Optional[str] = Query(
+        default=None,
+        description="Data mode: 'demo' for mock mode, 'gcp' or omitted for live GCP",
+    ),
     user: UserRBACContext = Depends(get_current_user),
 ) -> DashboardMetricsPayload:
     """Return composite GCP FinOps overview metrics matching filter criteria."""
@@ -89,6 +99,8 @@ async def get_metrics_overview(
             resource_id=resource_id,
             start_time=start_time,
             end_time=end_time,
+            bucket=bucket,
+            source=source,
         )
     except Exception as exc:
         raise HTTPException(
@@ -96,7 +108,20 @@ async def get_metrics_overview(
             detail=f"Filter parameter validation error: {exc}",
         ) from exc
 
-    return metrics_store.get_overview_payload(filter_params)
+    # Explicit Demo / Mock mode isolation
+    if source == "demo":
+        payload = metrics_store.get_overview_payload(filter_params)
+        payload.data_source = "demo"
+        return payload
+
+    gcp_service = getattr(request.app.state, "gcp_service", None)
+    if gcp_service is not None:
+        return await gcp_service.get_overview_payload(filter_params)
+
+    # Fallback to store only if GCP service is uninitialized
+    payload = metrics_store.get_overview_payload(filter_params)
+    payload.data_source = "demo"
+    return payload
 
 
 # ----------------------------------------------------------------------------
