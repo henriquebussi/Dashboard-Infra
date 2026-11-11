@@ -60,11 +60,37 @@ export const METRIC_KEYS: Record<string, MetricKeyMap> = {
 /** Backend metric fields used for the section-level trend chart. */
 const SERIES_KEYS: Record<string, string[]> = {
   database: ['qps', 'avg_response_time_ms'],
-  cloud: ['cpu_percent', 'memory_percent'],
+  cloud: ['cpu_percent', 'uptime_percent', 'memory_percent'],
   storage: ['total_usage', 'bucket_volume_usage_percent', 'iops'],
   processing: ['queued_jobs', 'running_jobs'],
   tokens: ['daily_token_count'],
   sla: ['availability_percent', 'error_counts_4xx_5xx'],
+};
+
+const SERIES_METRIC_LABELS: Record<string, string> = {
+  cpu_percent: 'Utilização de CPU',
+  uptime_percent: 'Disponibilidade do serviço',
+  memory_percent: 'Utilização de memória',
+  disk_percent: 'Utilização de disco',
+  qps: 'Consultas / s',
+  avg_response_time_ms: 'Tempo médio de resposta (ms)',
+  total_usage: 'Dados quentes',
+  bucket_volume_usage_percent: 'Nearline',
+  iops: 'IOPS',
+  queued_jobs: 'Jobs concluídos / h',
+  running_jobs: 'Pools de processamento ativos',
+  daily_token_count: 'Tokens (milhões)',
+  availability_percent: 'Disponibilidade (%)',
+  error_counts_4xx_5xx: 'Erros 4xx / 5xx',
+};
+
+const SERIES_COLORS: Record<string, string> = {
+  cpu_percent: '#216b4e',
+  uptime_percent: '#72a897',
+  memory_percent: '#bfd8ca',
+  disk_percent: '#9cc3b3',
+  qps: '#216b4e',
+  avg_response_time_ms: '#72a897',
 };
 
 const ptNumber = (value: number, digits = 0) =>
@@ -163,8 +189,18 @@ function severityOf(reading: MetricReadingDto): Metric['severity'] {
 
 function normalizeReading(raw: unknown): MetricReadingDto | null {
   if (!raw || typeof raw !== 'object') return null;
-  const candidate = raw as Partial<MetricReadingDto>;
+  const candidate = raw as Partial<MetricReadingDto> & Record<string, unknown>;
   if (typeof candidate.current_value !== 'number') return null;
+
+  const rawPoints = Array.isArray(candidate.time_series) && candidate.time_series.length > 0
+    ? candidate.time_series
+    : Array.isArray(candidate.time_series_points)
+      ? (candidate.time_series_points as Array<{ timestamp: string; value: number }>)
+      : [];
+
+  const rawTimestamps = Array.isArray(candidate.timestamps) && candidate.timestamps.length > 0
+    ? candidate.timestamps
+    : rawPoints.map((p) => p.timestamp);
 
   return {
     current_value: candidate.current_value,
@@ -175,7 +211,7 @@ function normalizeReading(raw: unknown): MetricReadingDto | null {
         : candidate.status === 'WARNING'
           ? 'WARNING'
           : 'HEALTHY',
-    time_series: Array.isArray(candidate.time_series) ? candidate.time_series : [],
+    time_series: rawPoints,
     change_percentage:
       typeof candidate.change_percentage === 'number' ? candidate.change_percentage : null,
     trend: candidate.trend ?? null,
@@ -187,7 +223,7 @@ function normalizeReading(raw: unknown): MetricReadingDto | null {
     reason: candidate.reason ?? null,
     bucket_seconds: candidate.bucket_seconds ?? null,
     gcp_metric_types: Array.isArray(candidate.gcp_metric_types) ? candidate.gcp_metric_types : [],
-    timestamps: Array.isArray(candidate.timestamps) ? candidate.timestamps : [],
+    timestamps: rawTimestamps,
     resources: Array.isArray(candidate.resources) ? candidate.resources : [],
     metadata:
       candidate.metadata && typeof candidate.metadata === 'object'
@@ -209,6 +245,78 @@ export function formatTimestampLabel(isoString: string): string {
   }
 }
 
+const ALIAS_MAP: Record<string, string[]> = {
+  // Cloud
+  cpu: ['cpu_percent', 'cpu_utilization'],
+  cpu_percent: ['cpu', 'cpu_utilization'],
+  memory: ['memory_percent', 'ram'],
+  memory_percent: ['memory', 'ram'],
+  disk: ['disk_percent'],
+  disk_percent: ['disk'],
+  cost: ['estimated_cost_usd'],
+  estimated_cost_usd: ['cost'],
+  uptime: ['uptime_percent'],
+  uptime_percent: ['uptime'],
+
+  // Database
+  qps: ['queries_per_second', 'queries'],
+  queries_per_second: ['qps', 'queries'],
+  connections: ['active_connections'],
+  active_connections: ['connections'],
+  locks: ['lock_waits'],
+  lock_waits: ['locks'],
+  slow_queries: ['slow_queries_count'],
+  slow_queries_count: ['slow_queries'],
+  response_time: ['avg_response_time_ms'],
+  avg_response_time_ms: ['response_time'],
+  cpu_io: ['cpu_io_percent'],
+  cpu_io_percent: ['cpu_io'],
+  replication_lag: ['replication_lag_seconds'],
+  replication_lag_seconds: ['replication_lag'],
+
+  // Storage
+  usage: ['total_usage', 'total_bytes'],
+  total_usage: ['usage', 'total_bytes'],
+  bucket_usage: ['bucket_volume_usage_percent', 'bucket_bytes'],
+  bucket_volume_usage_percent: ['bucket_usage', 'bucket_bytes'],
+  throughput: ['read_write_throughput_mb_s'],
+  read_write_throughput_mb_s: ['throughput'],
+  latency: ['latency_ms'],
+  latency_ms: ['latency'],
+
+  // Processing
+  queued: ['queued_jobs'],
+  queued_jobs: ['queued'],
+  running: ['running_jobs'],
+  running_jobs: ['running'],
+  processing_time: ['avg_processing_time_seconds'],
+  avg_processing_time_seconds: ['processing_time'],
+  failures: ['failure_counts'],
+  failure_counts: ['failures'],
+
+  // Tokens
+  tokens_day: ['daily_token_count'],
+  daily_token_count: ['tokens_day'],
+  tokens_week: ['weekly_token_count'],
+  weekly_token_count: ['tokens_week'],
+  model_cost: ['cost_per_model'],
+  cost_per_model: ['model_cost'],
+  error_rate: ['error_rate_percent'],
+  error_rate_percent: ['error_rate'],
+  rate_limits: ['rate_limit_breaches'],
+  rate_limit_breaches: ['rate_limits'],
+
+  // SLA
+  availability: ['availability_percent'],
+  availability_percent: ['availability'],
+  errors: ['error_counts_4xx_5xx'],
+  error_counts_4xx_5xx: ['errors'],
+  peak: ['peak_usage_percent'],
+  peak_usage_percent: ['peak'],
+  growth: ['growth_trend_percent'],
+  growth_trend_percent: ['growth'],
+};
+
 /** Read a metric field from the overview payload by section + backend field name. */
 export function getCategoryReading(
   overview: OverviewResponse | null,
@@ -216,9 +324,23 @@ export function getCategoryReading(
   metricKey: string,
 ): MetricReadingDto | null {
   if (!overview) return null;
-  const category = overview[sectionId as keyof OverviewResponse];
+  const category = overview[sectionId as keyof OverviewResponse] as Record<string, unknown> | undefined;
   if (!category || typeof category !== 'object') return null;
-  return normalizeReading((category as Record<string, unknown>)[metricKey]);
+
+  if (category[metricKey] !== undefined) {
+    const reading = normalizeReading(category[metricKey]);
+    if (reading) return reading;
+  }
+
+  const aliases = ALIAS_MAP[metricKey] ?? [];
+  for (const alt of aliases) {
+    if (category[alt] !== undefined) {
+      const reading = normalizeReading(category[alt]);
+      if (reading) return reading;
+    }
+  }
+
+  return null;
 }
 
 export function getMetricReading(
@@ -254,10 +376,12 @@ export function buildOverviewChart(
       }
 
       const mockEntry = section.series[index];
+      const name = SERIES_METRIC_LABELS[key] ?? mockEntry?.name ?? key;
+      const color = SERIES_COLORS[key] ?? mockEntry?.color;
       return {
-        name: mockEntry?.name ?? key,
+        name,
         values: reading.time_series.map((point) => point.value),
-        color: mockEntry?.color,
+        color,
       };
     })
     .filter((entry): entry is NonNullable<typeof entry> => entry !== null);
@@ -312,7 +436,10 @@ export function applyOverviewToSections(
         available: isAvailable,
         source: reading.source ?? 'gcp',
         reason: reading.reason ?? null,
-        timestamps: reading.timestamps,
+        timestamps:
+          reading.timestamps && reading.timestamps.length > 0
+            ? reading.timestamps
+            : reading.time_series.map((point) => point.timestamp),
         series:
           reading.time_series.length > 0
             ? reading.time_series.map((point) => point.value)

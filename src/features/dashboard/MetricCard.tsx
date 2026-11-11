@@ -22,7 +22,12 @@ export function MetricCard({ metric, period, multiplier, onSelect, dataSource }:
   // Chart timestamps and series from backend if available, or hourly mock generator
   const scale = metric.isLive ? 1 : multiplier;
   const chart = generateHourlySeries(period, metric.series.map((value) => value * scale));
-  const chartLabels = metric.timestamps && metric.timestamps.length === metric.series.length
+  const isLiveWithData = Boolean(metric.isLive && metric.series.length > 0);
+  const chartValues = isLiveWithData
+    ? (isAvailable ? metric.series : metric.series.map(() => 0))
+    : (isAvailable ? chart.values.map((v) => v * scale) : chart.values.map(() => 0));
+
+  const chartLabels = isLiveWithData && metric.timestamps && metric.timestamps.length === metric.series.length
     ? metric.timestamps.map((t) => {
         try {
           const dt = new Date(t);
@@ -31,7 +36,9 @@ export function MetricCard({ metric, period, multiplier, onSelect, dataSource }:
           return t;
         }
       })
-    : chart.labels;
+    : isLiveWithData
+      ? metric.series.map((_, i) => `${i + 1}`)
+      : chart.labels;
 
   const TrendIcon = metric.trend === 'up' ? ArrowUpRight : metric.trend === 'down' ? ArrowDownRight : Minus;
   const severityLabel = metric.severity === 'critical' ? 'crítico' : 'atenção';
@@ -133,7 +140,7 @@ export function MetricCard({ metric, period, multiplier, onSelect, dataSource }:
           </div>
           <ApexChart
             labels={chartLabels}
-            series={[{ name: metric.label, values: isAvailable ? chart.values.map((v) => v * scale) : chart.values.map(() => 0) }]}
+            series={[{ name: metric.label, values: chartValues }]}
             compact
           />
         </button>

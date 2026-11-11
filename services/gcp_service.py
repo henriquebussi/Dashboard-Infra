@@ -544,8 +544,28 @@ class GCPMonitoringService:
                         labels.update(dict(ts.resource.labels))
 
                         for point in ts.points:
-                            dt = point.interval.end_time.todatetime(tzinfo=timezone.utc)
-                            val_type = ts.value_type.name
+                            end_time = point.interval.end_time
+                            if hasattr(end_time, "todatetime"):
+                                dt = end_time.todatetime(tzinfo=timezone.utc)
+                            elif hasattr(end_time, "ToDatetime"):
+                                dt = end_time.ToDatetime().replace(tzinfo=timezone.utc)
+                            elif isinstance(end_time, datetime):
+                                dt = end_time if end_time.tzinfo else end_time.replace(tzinfo=timezone.utc)
+                            elif hasattr(end_time, "timestamp"):
+                                dt = datetime.fromtimestamp(end_time.timestamp(), tz=timezone.utc)
+                            else:
+                                dt = datetime.fromtimestamp(
+                                    end_time.seconds + getattr(end_time, "nanos", 0) / 1e9,
+                                    tz=timezone.utc,
+                                )
+
+                            val_type = getattr(ts.value_type, "name", None)
+                            if not val_type and isinstance(ts.value_type, int):
+                                try:
+                                    from google.api.metric_pb2 import MetricDescriptor as _MD
+                                    val_type = _MD.ValueType.Name(ts.value_type)
+                                except Exception:
+                                    val_type = ""
 
                             if val_type == "INT64":
                                 val = float(point.value.int64_value)
@@ -667,16 +687,26 @@ class GCPMonitoringService:
 
     async def get_compute_metrics(self, period: str = "1h", instance_id: Optional[str] = None) -> Dict[str, Any]:
         resource_labels = {"instance_id": instance_id} if instance_id else None
-        metric_names = ["cpu_utilization", "disk_read_bytes", "disk_write_bytes", "network_in", "network_out"]
+        metric_names = ["cpu_utilization", "uptime", "disk_read_bytes", "disk_write_bytes", "network_in", "network_out"]
         series_map: Dict[str, List[Dict[str, Any]]] = {}
         errors: List[str] = []
+
+        transforms = {
+            "cpu_utilization": lambda v: round(v * 100.0, 2) if v <= 1.0 else round(v, 2),
+            "uptime": lambda v: min(100.0, max(0.0, round(v * 100.0, 2) if v <= 1.0 else 99.9)),
+        }
 
         for name in metric_names:
             metric_type = METRIC_DESCRIPTORS.get(("cloud", name))
             if not metric_type:
                 continue
             try:
-                series_list = await self.query_metric(metric_type=metric_type, period=period, resource_labels=resource_labels)
+                series_list = await self.query_metric(
+                    metric_type=metric_type,
+                    period=period,
+                    resource_labels=resource_labels,
+                    value_transform=transforms.get(name),
+                )
                 for s in series_list:
                     s.category = "cloud"
                     s.metric_name = name
@@ -1083,7 +1113,14 @@ class CachedGCPMetricsService:
         # Build ResourceBreakdownItems
         resources: List[ResourceBreakdownItem] = []
         for s in series_list:
-            r_name = s.resource_name or (s.labels.get("name") if s.labels else "resource-1")
+            r_name = (
+                s.resource_name
+                or (s.labels.get("name") if s.labels else None)
+                or (s.labels.get("instance_id") if s.labels else None)
+                or (s.labels.get("instance_name") if s.labels else None)
+                or (s.labels.get("project_id") if s.labels else None)
+                or "resource-1"
+            )
             r_val = s.aggregated_avg
             r_region = s.labels.get("region") or s.labels.get("location") or s.labels.get("zone")
             resources.append(
