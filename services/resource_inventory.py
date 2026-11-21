@@ -31,6 +31,7 @@ class ResourceInventoryService:
         metric_type: str,
         labels: Dict[str, str],
         env: Environment = Environment.PROD,
+        project: str = "",
     ) -> Optional[GcpResourceMetadata]:
         """Inspect a metric's labels and extract any identifiable GCP resource."""
         if not labels:
@@ -41,7 +42,7 @@ class ResourceInventoryService:
             raw_id = labels["database_id"]
             name = raw_id.split(":")[-1] if ":" in raw_id else raw_id
             region = labels.get("region", "us-central1")
-            key = f"sql:{name}"
+            key = f"{project}:{env.value}:sql:{name}"
             existing = self._discovered_resources.get(key)
             if existing:
                 existing.metric_count += 1
@@ -63,7 +64,7 @@ class ResourceInventoryService:
             name = labels.get("instance_name") or labels.get("instance_id", "unknown-vm")
             zone = labels.get("zone", "us-central1-a")
             region = "-".join(zone.split("-")[:2]) if "-" in zone else zone
-            key = f"compute:{name}"
+            key = f"{project}:{env.value}:compute:{name}"
             existing = self._discovered_resources.get(key)
             if existing:
                 existing.metric_count += 1
@@ -84,7 +85,7 @@ class ResourceInventoryService:
         if "bucket_name" in labels:
             name = labels["bucket_name"]
             location = labels.get("location", "US")
-            key = f"gcs:{name}"
+            key = f"{project}:{env.value}:gcs:{name}"
             existing = self._discovered_resources.get(key)
             if existing:
                 existing.metric_count += 1
@@ -104,8 +105,8 @@ class ResourceInventoryService:
         # 4. BigQuery Datasets or Tables
         if "dataset_id" in labels or "table_id" in labels:
             name = labels.get("table_id") or labels.get("dataset_id", "bq-analytics")
-            region = labels.get("project_id", "US")
-            key = f"bq:{name}"
+            region = labels.get("location", "desconhecida")
+            key = f"{project}:{env.value}:bq:{name}"
             existing = self._discovered_resources.get(key)
             if existing:
                 existing.metric_count += 1
@@ -126,7 +127,7 @@ class ResourceInventoryService:
         if "endpoint_id" in labels or "model_id" in labels:
             name = labels.get("model_id") or labels.get("endpoint_id", "vertex-endpoint")
             region = labels.get("location", "us-central1")
-            key = f"ai:{name}"
+            key = f"{project}:{env.value}:ai:{name}"
             existing = self._discovered_resources.get(key)
             if existing:
                 existing.metric_count += 1

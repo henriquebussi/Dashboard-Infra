@@ -5,6 +5,15 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 lerna-debug.log*
+log.md
+/docs/
+
+# Material local de prompts e automação
+/prompts/
+/prompt-*.md
+/prompts-*.md
+/METRIC_SOURCES.md
+/Automacao-codex-*.patch
 
 # Dependencies
 node_modules
@@ -41,3 +50,16 @@ __pycache__/
 venv/
 *.egg-info/
 
+
+*.sqlite3*
+*.sqlite
+*.db
+*.db-wal
+*.db-shm
+*.db-journal
+/.aws/
+/.codex/
+/.agents/
+application_default_credentials.json
+*.pem
+*.key

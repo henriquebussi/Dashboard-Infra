@@ -4,7 +4,7 @@
  * useGcpMetrics(category, env, period)
  *   - Fetches live GCP data from the backend on mount.
  *   - Auto-polls every VITE_METRICS_POLL_MS milliseconds (default 30 s).
- *   - Falls back to `null` data on error so the dashboard can render mock data.
+ *   - Exposes errors without substituting demonstration data.
  *   - Exposes { data, loading, error, stale, refetch }.
  *
  * useGcpHealth()
@@ -50,8 +50,8 @@ interface AsyncState<T> {
   error: Error | null;
 }
 
-function useAsyncPoll<T>(
-  fetcher: () => Promise<T>,
+export function useAsyncPoll<T>(
+  fetcher: (signal: AbortSignal) => Promise<T>,
   pollMs: number,
   deps: unknown[],
   enabled = true,
@@ -71,9 +71,11 @@ function useAsyncPoll<T>(
     async (isBackground = false) => {
       if (!mountedRef.current || !enabled) return;
 
+      if (isBackground && abortRef.current && !abortRef.current.signal.aborted) return;
       // Cancel any in-flight request.
       abortRef.current?.abort();
-      abortRef.current = new AbortController();
+      const controller = new AbortController();
+      abortRef.current = controller;
 
       setState((prev) => ({
         ...prev,
@@ -82,11 +84,11 @@ function useAsyncPoll<T>(
       }));
 
       try {
-        const data = await fetcher();
-        if (!mountedRef.current) return;
+        const data = await fetcher(controller.signal);
+        if (!mountedRef.current || controller.signal.aborted) return;
         setState({ data, loading: false, stale: false, error: null });
       } catch (err) {
-        if (!mountedRef.current) return;
+        if (!mountedRef.current || controller.signal.aborted) return;
         const error = err instanceof Error ? err : new Error(String(err));
         setState((prev) => ({
           ...prev,
@@ -94,6 +96,8 @@ function useAsyncPoll<T>(
           stale: false,
           error,
         }));
+      } finally {
+        if (abortRef.current === controller) abortRef.current = null;
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -113,6 +117,7 @@ function useAsyncPoll<T>(
       };
     }
 
+    setState({ data: null, loading: true, stale: false, error: null });
     execute(false);
 
     if (pollMs > 0) {
@@ -156,7 +161,7 @@ export function useGcpMetrics(
   const backendEnv = envToBackend(env);
 
   const result = useAsyncPoll(
-    () => fetchGcpMetrics(category, backendEnv, period),
+    signal => fetchGcpMetrics(category, backendEnv, period, {}, signal),
     POLL_MS,
     [category, backendEnv, period],
     enabled,
@@ -185,7 +190,7 @@ export function useOverview(
   pollMs = 30_000,
 ): UseOverviewResult {
   return useAsyncPoll(
-    () => fetchOverview(env, period, options),
+    signal => fetchOverview(env, period, options, signal),
     pollMs,
     [env, period, options.service, options.resourceId, options.bucket, options.source],
     enabled,
@@ -206,7 +211,7 @@ export function useGcpResources(
   pollMs = 60_000,
 ): UseGcpResourcesResult {
   return useAsyncPoll(
-    () => fetchGcpResources(options),
+    signal => fetchGcpResources(options, signal),
     pollMs,
     [options.env, options.service, options.search],
     enabled,
@@ -229,7 +234,7 @@ export function useSlowQueries(
 ): UseSlowQueriesResult {
   const backendEnv = envToBackend(env);
   return useAsyncPoll(
-    () => fetchSlowQueries(backendEnv, options),
+    signal => fetchSlowQueries(backendEnv, options, signal),
     pollMs,
     [backendEnv, options.hours, options.thresholdMs, options.databaseId],
     enabled,
@@ -252,7 +257,7 @@ export function useGcpErrors(
 ): UseGcpErrorsResult {
   const backendEnv = envToBackend(env);
   return useAsyncPoll(
-    () => fetchErrorLogs(backendEnv, options),
+    signal => fetchErrorLogs(backendEnv, options, signal),
     pollMs,
     [backendEnv, options.hours, options.maxEntries, options.serviceFilter],
     enabled,
@@ -276,7 +281,7 @@ export function useTokenUsage(
 ): UseTokenUsageResult {
   const backendEnv = envToBackend(env);
   return useAsyncPoll(
-    () => fetchTokenUsage(backendEnv, hours, ttl),
+    signal => fetchTokenUsage(backendEnv, hours, ttl, signal),
     pollMs,
     [backendEnv, hours, ttl],
     enabled,

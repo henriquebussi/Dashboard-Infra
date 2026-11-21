@@ -240,13 +240,12 @@ class RedisCache:
         try:
             await self._breaker.call(self._redis.ping())
             self._available = True
-            logger.info("[RedisCache] Connected to %s", self._url)
+            logger.info("[RedisCache] Connected")
         except Exception as exc:
             logger.warning(
-                "[RedisCache] Redis unavailable at %s (%s). "
+                "[RedisCache] Redis unavailable (%s). "
                 "Running in cache-miss mode; set REDIS_ENABLED=false to silence this warning.",
-                self._url,
-                exc,
+                type(exc).__name__,
             )
             # Do not start the pre-warm loop while Redis is unreachable.
             return
@@ -366,13 +365,14 @@ class RedisCache:
         if self._redis is None:
             return 0
         try:
-            keys: List[bytes] = await self._breaker.call(self._redis.keys(pattern))
-            if keys:
-                deleted: int = await self._breaker.call(self._redis.delete(*keys))
-                logger.info(
-                    "[RedisCache] Flushed %d keys matching '%s'", deleted, pattern
-                )
-                return deleted
+            deleted = 0
+            cursor = 0
+            while True:
+                cursor, keys = await self._breaker.call(self._redis.scan(cursor, match=pattern, count=200))
+                if keys:
+                    deleted += await self._breaker.call(self._redis.delete(*keys))
+                if not cursor:
+                    return deleted
         except Exception as exc:
             logger.warning("[RedisCache] flush_namespace failed: %s", exc)
         return 0

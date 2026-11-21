@@ -218,7 +218,7 @@ function normalizeReading(raw: unknown): MetricReadingDto | null {
     min_value: typeof candidate.min_value === 'number' ? candidate.min_value : null,
     max_value: typeof candidate.max_value === 'number' ? candidate.max_value : null,
     avg_value: typeof candidate.avg_value === 'number' ? candidate.avg_value : null,
-    available: candidate.available !== false,
+    available: candidate.available !== false && candidate.source !== 'unavailable',
     source: candidate.source ?? 'gcp',
     reason: candidate.reason ?? null,
     bucket_seconds: candidate.bucket_seconds ?? null,
@@ -424,9 +424,16 @@ export function applyOverviewToSections(
       );
 
       const isAvailable = reading.available !== false;
+      const source = overview.data_source === 'demo' ? 'demo' : reading.source ?? 'gcp';
+      const isCost = (section.id === 'cloud' && metric.id === 'cost') || (section.id === 'tokens' && metric.id === 'model-cost');
 
       return {
         ...metric,
+        label: isCost && source !== 'demo'
+          ? source === 'estimated'
+            ? metric.id === 'cost' ? 'Custo estimado' : 'Custo estimado / modelo'
+            : metric.id === 'cost' ? 'Custo de infraestrutura' : 'Custo / modelo'
+          : metric.label,
         value: isAvailable ? formatMetricValue(reading) : 'Indisponível',
         change: isAvailable ? formatChange(reading) : '—',
         trend: isAvailable ? trendOf(reading) : 'flat',
@@ -434,7 +441,7 @@ export function applyOverviewToSections(
         action: alert?.suggested_action ?? (isAvailable ? metric.action : undefined),
         isLive: true,
         available: isAvailable,
-        source: reading.source ?? 'gcp',
+        source,
         reason: reading.reason ?? null,
         timestamps:
           reading.timestamps && reading.timestamps.length > 0
@@ -443,7 +450,7 @@ export function applyOverviewToSections(
         series:
           reading.time_series.length > 0
             ? reading.time_series.map((point) => point.value)
-            : (isAvailable ? metric.series : metric.series.map(() => 0)),
+            : (!isAvailable || isCost ? [] : metric.series),
         resources:
           reading.resources.length > 0
             ? reading.resources.map((resource) => ({

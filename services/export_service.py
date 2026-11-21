@@ -82,7 +82,7 @@ def _extract_metric_rows(payload: DashboardMetricsPayload) -> List[Dict[str, Any
                             if field_val.change_percentage is not None
                             else "N/A"
                         ),
-                        "source": getattr(field_val, "source", "gcp"),
+                        "source": "demo" if payload.data_source == "demo" else field_val.source,
                         "available": "Sim" if getattr(field_val, "available", True) else "Não",
                         "reason": getattr(field_val, "reason", "") or "",
                     }
@@ -328,7 +328,7 @@ def to_excel_bytes(payload: DashboardMetricsPayload) -> bytes:
                 status_str = f_val.status.value if hasattr(f_val.status, "value") else str(f_val.status)
                 chg = f"{f_val.change_percentage:+.1f}%" if f_val.change_percentage is not None else "0.0%"
                 unit_str = f_val.unit.value if hasattr(f_val.unit, "value") else str(f_val.unit)
-                src = getattr(f_val, "source", "gcp")
+                src = "demo" if payload.data_source == "demo" else f_val.source
                 avail = "Sim" if getattr(f_val, "available", True) else "Não"
                 rsn = getattr(f_val, "reason", "") or ""
 

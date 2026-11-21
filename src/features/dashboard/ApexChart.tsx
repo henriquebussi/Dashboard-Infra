@@ -1,4 +1,5 @@
-import Chart from 'react-apexcharts';
+import { lazy, Suspense } from 'react';
+const Chart = lazy(() => import('react-apexcharts'));
 import type { ApexOptions } from 'apexcharts';
 
 type Props = {
@@ -42,6 +43,7 @@ export function ApexChart({ labels, series, compact = false, type = 'area', stac
   };
   return (
     <div data-testid="chart-infrastructure-trend" className={compact ? 'h-[72px] w-full' : 'h-[270px] w-full'}>
+      <Suspense fallback={<span>Carregando gráfico…</span>}>
       <Chart
         options={options}
         series={series.map((entry, index) => ({
@@ -53,6 +55,7 @@ export function ApexChart({ labels, series, compact = false, type = 'area', stac
         height="100%"
         width="100%"
       />
+      </Suspense>
     </div>
   );
 }

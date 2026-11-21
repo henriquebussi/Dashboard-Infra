@@ -14,7 +14,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 
 from schemas import (
     AlertRule,
@@ -29,10 +29,15 @@ from schemas import (
     UserRole,
 )
 from security import get_current_user, require_role
-from services.audit_service import audit_service
+from services import governance
 from services.metrics_store import metrics_store
 
 router = APIRouter()
+
+
+@router.get("/session")
+async def session(user: UserRBACContext = Depends(get_current_user)):
+    return {"email": user.email, "role": user.role}
 
 
 # ----------------------------------------------------------------------------
@@ -118,10 +123,7 @@ async def get_metrics_overview(
     if gcp_service is not None:
         return await gcp_service.get_overview_payload(filter_params)
 
-    # Fallback to store only if GCP service is uninitialized
-    payload = metrics_store.get_overview_payload(filter_params)
-    payload.data_source = "demo"
-    return payload
+    raise HTTPException(503, "Integração GCP indisponível")
 
 
 # ----------------------------------------------------------------------------
@@ -141,6 +143,9 @@ async def get_metrics_overview(
 )
 async def get_category_timeseries(
     category: str,
+    request: Request,
+    source: Optional[str] = None,
+    env: Environment = Environment.PROD,
     period: TimePeriod = Query(
         default=TimePeriod.TWENTY_FOUR_HOURS,
         alias="period",
@@ -162,6 +167,19 @@ async def get_category_timeseries(
 ) -> Dict[str, Any]:
     """Retrieve historical time-series datapoints supporting up to 30-day and 90-day retention."""
     try:
+        if source != "demo":
+            if category not in {"cloud", "database", "storage", "processing", "tokens", "sla"}:
+                raise ValueError("Categoria desconhecida")
+            svc = getattr(request.app.state, "gcp_service", None)
+            if svc is None:
+                raise HTTPException(503, "Integração GCP indisponível")
+            filters = DashboardFilterParams(period=period, environment=env, start_time=start_time, end_time=end_time)
+            payload = await svc.get_overview_payload(filters)
+            section = getattr(payload, category)
+            series = {name: reading.time_series for name, reading in section
+                      if hasattr(reading, "time_series") and (not metric_name or metric_name == name)}
+            return {"category": category, "period": period.value, "series": series,
+                    "metric_count": len(series), "data_source": payload.data_source}
         return metrics_store.get_category_timeseries(
             category=category,
             period=period,
@@ -193,6 +211,8 @@ async def get_category_timeseries(
     response_description="List of active AlertRule instances.",
 )
 async def get_active_alerts(
+    request: Request, source: Optional[str] = None, env: Environment = Environment.PROD,
+    period: TimePeriod = TimePeriod.TWENTY_FOUR_HOURS,
     severity: Optional[AlertSeverity] = Query(
         default=None,
         description="Filter by alert severity (WARNING or CRITICAL)",
@@ -209,6 +229,13 @@ async def get_active_alerts(
     user: UserRBACContext = Depends(get_current_user),
 ) -> List[AlertRule]:
     """Retrieve active alerts requiring engineering or FinOps attention."""
+    if source != "demo":
+        svc = getattr(request.app.state, "gcp_service", None)
+        if svc is None:
+            raise HTTPException(503, "Integração GCP indisponível")
+        payload = await svc.get_overview_payload(DashboardFilterParams(environment=env, period=period, resource_id=resource_id))
+        return [alert for alert in payload.active_alerts if (severity is None or alert.severity == severity)
+                and (is_acknowledged is None or alert.is_acknowledged == is_acknowledged)]
     return metrics_store.get_active_alerts(
         severity=severity,
         resource_id=resource_id,
@@ -234,12 +261,14 @@ async def get_active_alerts(
     response_description="The updated MetricThresholdConfig definition.",
 )
 async def update_metric_threshold(
-    config: MetricThresholdConfig,
+    config: MetricThresholdConfig, response: Response,
     current_admin: UserRBACContext = Depends(require_role(UserRole.INFRA_ADMIN)),
 ) -> MetricThresholdConfig:
     """Update custom alert threshold configuration (restricted to Infrastructure Admin)."""
-    updated, _ = metrics_store.update_threshold(config)
-    return updated
+    entry = governance.save_threshold(config, current_admin.user_id)
+    response.headers["X-Audit-Recorded"] = "true"
+    response.headers["X-Audit-Log-Id"] = str(entry.log_id)
+    return config
 
 
 @router.get(
@@ -253,7 +282,7 @@ async def list_metric_thresholds(
     user: UserRBACContext = Depends(get_current_user),
 ) -> List[MetricThresholdConfig]:
     """List all registered threshold configurations."""
-    return metrics_store.list_thresholds()
+    return list(governance.thresholds().values())
 
 
 # ----------------------------------------------------------------------------
@@ -307,12 +336,20 @@ async def get_audit_logs(
     user: UserRBACContext = Depends(get_current_user),
 ) -> List[AuditLogEntry]:
     """Query audit log records for governance and change tracking."""
-    return audit_service.query(
-        user_id=user_id,
-        action_type=action_type,
-        targeted_metric=targeted_metric,
-        start_time=start_time,
-        end_time=end_time,
-        limit=limit,
-        offset=offset,
-    )
+    from datetime import timezone
+    if start_time and not start_time.tzinfo:
+        start_time = start_time.replace(tzinfo=timezone.utc)
+    if end_time and not end_time.tzinfo:
+        end_time = end_time.replace(tzinfo=timezone.utc)
+    return [entry for entry in governance.audit_entries()
+            if (not user_id or user_id.lower() in entry.user_id.lower())
+            and (not targeted_metric or targeted_metric.lower() in entry.targeted_metric.lower())
+            and (not action_type or str(getattr(entry.action_type, "value", entry.action_type)).lower() == action_type.lower())
+            and (not start_time or entry.timestamp >= start_time)
+            and (not end_time or entry.timestamp <= end_time)][offset:offset + limit]
+
+
+@router.get("/qdrant/metrics")
+async def qdrant_metrics(env: Environment = Environment.PROD, user: UserRBACContext = Depends(get_current_user)):
+    from services.qdrant_service import collection_count
+    return {"provider": "Qdrant", "collections": await collection_count(env)}

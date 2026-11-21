@@ -112,6 +112,7 @@ from services.metric_registry import (
     get_category_definitions,
     get_metric_definition,
 )
+from services.alerts import evaluate_local_alerts
 from services.resource_inventory import resource_inventory
 
 # ---------------------------------------------------------------------------
@@ -369,6 +370,7 @@ class LogBasedMetricResult:
     total_count: int
     capped: bool = False
     estimated: bool = False
+    error: Optional[str] = None
     fetched_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
     def to_dict(self) -> Dict[str, Any]:
@@ -377,6 +379,7 @@ class LogBasedMetricResult:
             "total_count": self.total_count,
             "capped": self.capped,
             "estimated": self.estimated,
+            "error": self.error,
             "fetched_at": self.fetched_at.isoformat(),
             "entries": self.log_entries,
         }
@@ -465,6 +468,51 @@ class GCPMonitoringService:
         interval.start_time = start_ts
         return interval
 
+    async def list_descriptors(self, active_only: bool, page_token: str = "") -> dict:
+        def read():
+            descriptors = self._get_monitoring_client().list_metric_descriptors(
+                request={"name": self._project_name, "active_only": active_only,
+                         "filter": f'project={json.dumps(self.project_id)}',
+                         "page_size": 100, "page_token": page_token},
+                retry=None, timeout=15,
+            )
+            page = next(iter(descriptors.pages))
+            return {"metrics": [{"type": d.type, "unit": d.unit, "name": d.display_name}
+                                for d in page.metric_descriptors],
+                    "next_page_token": page.next_page_token}
+
+        async with self._semaphore:
+            return await asyncio.to_thread(read)
+
+    async def raw_series_page(self, metric_type: str, period: str, end: datetime,
+                              page_token: str, environment_label: str, env: str) -> dict:
+        filters = [f'metric.type={json.dumps(metric_type)}', f'project={json.dumps(self.project_id)}']
+        if environment_label:
+            filters.append(f'resource.labels.{environment_label}={json.dumps(env)}')
+        start = end - timedelta(seconds=_period_to_seconds(period))
+
+        def read():
+            pager = self._get_monitoring_client().list_time_series(
+                request={
+                    "name": self._project_name, "filter": " AND ".join(filters),
+                    "interval": self._build_interval(start, end), "view": "FULL",
+                    "page_size": 100, "page_token": page_token,
+                }, retry=None, timeout=15,
+            )
+            page = next(iter(pager.pages))
+            return {
+                "series": [type(series).to_dict(series, always_print_fields_with_no_presence=False)
+                           for series in page.time_series],
+                "next_page_token": page.next_page_token,
+                "end": end.isoformat(),
+                "start": start.isoformat(),
+                "project": self.project_id,
+                "warnings": [error.message for error in page.execution_errors],
+            }
+
+        async with self._semaphore:
+            return await asyncio.to_thread(read)
+
     async def query_metric(
         self,
         metric_type: str,
@@ -493,10 +541,11 @@ class GCPMonitoringService:
 
         interval = self._build_interval(start_time, end_time)
 
-        filters = [f'metric.type="{metric_type}"']
+        filters = [f'metric.type="{metric_type}"', f'project={json.dumps(self.project_id)}']
         if resource_labels:
             for k, v in resource_labels.items():
-                filters.append(f'resource.labels.{k}="{v}"')
+                safe_value = v.replace("\\", "\\\\").replace('"', '\\"')
+                filters.append(f'resource.labels.{k}="{safe_value}"')
         if extra_filter:
             filters.append(extra_filter)
 
@@ -656,6 +705,7 @@ class GCPMonitoringService:
             total_count=res.total_count,
             capped=res.capped,
             estimated=res.estimated,
+            error=res.error,
             fetched_at=res.fetched_at,
         )
 
@@ -667,6 +717,7 @@ class GCPMonitoringService:
             total_count=res.total_count,
             capped=res.capped,
             estimated=res.estimated,
+            error=res.error,
             fetched_at=res.fetched_at,
         )
 
@@ -678,6 +729,7 @@ class GCPMonitoringService:
             total_count=res.total_count,
             capped=res.capped,
             estimated=res.estimated,
+            error=res.error,
             fetched_at=res.fetched_at,
         )
 
@@ -693,7 +745,6 @@ class GCPMonitoringService:
 
         transforms = {
             "cpu_utilization": lambda v: round(v * 100.0, 2) if v <= 1.0 else round(v, 2),
-            "uptime": lambda v: min(100.0, max(0.0, round(v * 100.0, 2) if v <= 1.0 else 99.9)),
         }
 
         for name in metric_names:
@@ -748,7 +799,13 @@ class GCPMonitoringService:
             if not metric_type:
                 continue
             try:
-                series_list = await self.query_metric(metric_type=metric_type, period=period, resource_labels=resource_labels)
+                daily = name in {"total_bytes", "bucket_bytes"}
+                series_list = await self.query_metric(
+                    metric_type=metric_type,
+                    period=period if not daily or _period_to_seconds(period) >= 86400 else "24h",
+                    alignment_period_seconds=86400 if daily else 60,
+                    resource_labels=resource_labels,
+                )
                 for s in series_list:
                     s.category = "storage"
                     s.metric_name = name
@@ -794,6 +851,19 @@ class CachedGCPMetricsService:
             circuit_failure_threshold=gcp_circuit_failure_threshold,
             circuit_open_window=gcp_circuit_open_window,
         )
+        self._project_clients: Dict[str, GCPMonitoringService] = {project_id: self._gcp}
+        self._circuit_failure_threshold = gcp_circuit_failure_threshold
+        self._circuit_open_window = gcp_circuit_open_window
+
+    def _client_for_project(self, project_id: str) -> GCPMonitoringService:
+        if project_id not in self._project_clients:
+            self._project_clients[project_id] = GCPMonitoringService(
+                project_id=project_id,
+                credentials=self._credentials,
+                circuit_failure_threshold=self._circuit_failure_threshold,
+                circuit_open_window=self._circuit_open_window,
+            )
+        return self._project_clients[project_id]
 
     @staticmethod
     def _parse_project_map() -> Dict[str, str]:
@@ -831,6 +901,20 @@ class CachedGCPMetricsService:
             f"Environment mapping not configured for {env_str}; displaying single-project scope.",
         )
 
+    async def metric_catalog(self, env: Environment, active_only: bool, page_token: str = "") -> dict:
+        project, scope, warning = self.resolve_environment(env)
+        page = await self._client_for_project(project).list_descriptors(active_only, page_token)
+        return {"project": project, "scope": scope, "warning": warning, **page}
+
+    async def catalog_series(self, env: Environment, metric_type: str, period: TimePeriod,
+                             end: datetime, page_token: str) -> dict:
+        project, scope, warning = self.resolve_environment(env)
+        label = os.getenv("GCP_ENV_LABEL", "").strip() if scope == "label-filtered" else ""
+        page = await self._client_for_project(project).raw_series_page(
+            metric_type, period.value, end, page_token, label, env.value,
+        )
+        return {**page, "scope": scope, "warning": warning}
+
     # ------------------------------------------------------------------
     # Metric-Level Caching Key Builder
     # ------------------------------------------------------------------
@@ -862,6 +946,11 @@ class CachedGCPMetricsService:
 
         Executes current and baseline comparison windows in parallel to calculate change_percentage.
         """
+        services = {"cloud": "Compute Engine", "database": "Cloud SQL", "storage": "Cloud Storage",
+                    "processing": "BigQuery", "tokens": "Vertex AI"}
+        if filters.service and filters.service not in {"All services", "Todos os serviços", services.get(defn.category)}:
+            return MetricReading(current_value=0, unit=defn.unit, status=MetricStatus.HEALTHY,
+                                 available=False, source="unavailable", reason="Fora do serviço selecionado")
         # Guard 1: Requires GCP Billing
         if defn.requires_billing:
             return MetricReading(
@@ -870,7 +959,7 @@ class CachedGCPMetricsService:
                 status=MetricStatus.HEALTHY,
                 available=False,
                 source="unavailable",
-                reason=defn.unavailable_reason or "Requires GCP Billing permissions",
+                reason=defn.unavailable_reason or "Billing source is not configured; cost integration is not implemented",
                 bucket_seconds=0,
                 gcp_metric_types=defn.gcp_metric_types,
                 timestamps=[],
@@ -892,28 +981,33 @@ class CachedGCPMetricsService:
                 resources=[],
             )
 
-        period_seconds = _period_to_seconds(filters.time_period)
+        period_seconds = defn.window_seconds or _period_to_seconds(filters.time_period)
+        if filters.time_period == TimePeriod.CUSTOM:
+            period_seconds = int((filters.end_time - filters.start_time).total_seconds())
+        if defn.is_daily_snapshot:
+            period_seconds = max(period_seconds, 86400)
         bucket_sec = calculate_bucket_seconds(
             period_seconds=period_seconds,
             bucket_override=filters.bucket,
             is_daily_snapshot=defn.is_daily_snapshot,
         )
 
-        now = datetime.now(timezone.utc)
-        cur_end = now
-        cur_start = cur_end - timedelta(seconds=period_seconds)
-        prev_end = cur_start
-        prev_start = prev_end - timedelta(seconds=period_seconds)
-
         # Build extra filters
         extra_filters = []
         if defn.filter_template:
             extra_filters.append(defn.filter_template)
         env_label = os.getenv("GCP_ENV_LABEL", "").strip()
-        if env_label:
+        if env_label and target_project == self.project_id and effective_env.value not in self._project_map:
             extra_filters.append(f'resource.labels.{env_label}="{effective_env.value}"')
         if filters.resource_id:
-            extra_filters.append(f'resource.labels.name="{filters.resource_id}"')
+            resource_label = {
+                "cloud": "instance_id",
+                "database": "database_id",
+                "storage": "bucket_name",
+            }.get(defn.category)
+            if resource_label:
+                safe_id = filters.resource_id.replace("\\", "\\\\").replace('"', '\\"')
+                extra_filters.append(f'resource.labels.{resource_label}="{safe_id}"')
 
         combined_filter = " AND ".join(extra_filters)
 
@@ -928,9 +1022,9 @@ class CachedGCPMetricsService:
             cache_key = self.build_metric_cache_key(
                 project=target_project,
                 metric_type=candidate_type,
-                period=filters.time_period.value,
+                period=f"{period_seconds}:{filters.end_time}" if filters.time_period == TimePeriod.CUSTOM else str(period_seconds),
                 bucket_seconds=bucket_sec,
-                filter_str=combined_filter,
+                filter_str=f"{combined_filter}|{defn.aligner}|{defn.reducer}|{defn.group_by_fields}|{defn.id}|{effective_env.value if env_label else ''}",
             )
 
             # TTL: max(default_ttl, bucket_seconds), daily metrics >= 300s
@@ -939,7 +1033,12 @@ class CachedGCPMetricsService:
                 ttl = max(ttl, 300)
 
             async def _fetch_dual() -> Tuple[List[MetricSeries], List[MetricSeries]]:
-                cur_task = self._gcp.query_metric(
+                cur_end = filters.end_time if filters.time_period == TimePeriod.CUSTOM else datetime.now(timezone.utc)
+                cur_start = cur_end - timedelta(seconds=period_seconds)
+                prev_end = cur_start
+                prev_start = prev_end - timedelta(seconds=period_seconds)
+                monitoring = self._client_for_project(target_project)
+                cur_task = monitoring.query_metric(
                     metric_type=candidate_type,
                     period=filters.time_period.value,
                     aligner=defn.aligner,
@@ -951,7 +1050,7 @@ class CachedGCPMetricsService:
                     end_time=cur_end,
                     value_transform=defn.value_transform,
                 )
-                prev_task = self._gcp.query_metric(
+                prev_task = monitoring.query_metric(
                     metric_type=candidate_type,
                     period=filters.time_period.value,
                     aligner=defn.aligner,
@@ -975,7 +1074,7 @@ class CachedGCPMetricsService:
                 cached_raw, hit = await self.cache.get_or_fetch_with_meta(
                     key=cache_key,
                     fetcher=lambda: self._dedup.execute(cache_key, _cached_call),
-                    ttl=ttl,
+                    ttl=ttl, register_prewarm=False,
                 )
                 from_cache = hit
 
@@ -1041,7 +1140,7 @@ class CachedGCPMetricsService:
                 status=MetricStatus.HEALTHY,
                 available=False,
                 source="unavailable",
-                reason=defn.unavailable_reason or "Requires Google Cloud Ops Agent installed on VMs",
+                reason=last_error or defn.unavailable_reason or "Requires Google Cloud Ops Agent installed on VMs",
                 bucket_seconds=bucket_sec,
                 gcp_metric_types=defn.gcp_metric_types,
                 timestamps=[],
@@ -1071,7 +1170,7 @@ class CachedGCPMetricsService:
                     category=defn.category,
                     metric_type=s.metric_type,
                     labels=s.labels,
-                    env=effective_env,
+                    env=effective_env, project=target_project,
                 )
             for p in s.points:
                 ts_str = p.timestamp.isoformat()
@@ -1081,7 +1180,12 @@ class CachedGCPMetricsService:
         merged_points: List[TimeSeriesPoint] = []
         for ts_str in sorted_ts:
             vals = timestamp_buckets[ts_str]
-            avg_v = sum(vals) / len(vals) if vals else 0.0
+            if defn.reducer == "REDUCE_SUM":
+                avg_v = sum(vals)
+            elif defn.reducer == "REDUCE_MAX":
+                avg_v = max(vals) if vals else 0.0
+            else:
+                avg_v = sum(vals) / len(vals) if vals else 0.0
             merged_points.append(
                 TimeSeriesPoint(
                     timestamp=datetime.fromisoformat(ts_str),
@@ -1089,7 +1193,10 @@ class CachedGCPMetricsService:
                 )
             )
 
-        current_val = merged_points[-1].value if merged_points else 0.0
+        current_val = (
+            sum(p.value for p in merged_points)
+            if defn.window_seconds else (merged_points[-1].value if merged_points else 0.0)
+        )
         cur_avg = sum(p.value for p in merged_points) / len(merged_points) if merged_points else 0.0
 
         # Baseline comparison
@@ -1097,12 +1204,15 @@ class CachedGCPMetricsService:
         for s in baseline_series_list:
             for p in s.points:
                 prev_vals.append(p.value)
-        prev_avg = sum(prev_vals) / len(prev_vals) if prev_vals else None
+        prev_avg = (
+            sum(prev_vals) if defn.window_seconds else sum(prev_vals) / len(prev_vals)
+        ) if prev_vals else None
 
         change_pct: Optional[float] = None
         trend: Optional[TrendDirection] = None
         if prev_avg is not None and abs(prev_avg) > 1e-6:
-            change_pct = round(((cur_avg - prev_avg) / abs(prev_avg)) * 100.0, 2)
+            comparison_value = current_val if defn.window_seconds else cur_avg
+            change_pct = round(((comparison_value - prev_avg) / abs(prev_avg)) * 100.0, 2)
             if change_pct > 1.0:
                 trend = TrendDirection.UP
             elif change_pct < -1.0:
@@ -1179,22 +1289,27 @@ class CachedGCPMetricsService:
         reading_dict = dict(zip([name for name, _ in definitions], readings))
 
         # Check for slow queries via Cloud Logging if slow_queries_count is unavailable
-        if not reading_dict["slow_queries_count"].available or reading_dict["slow_queries_count"].current_value == 0:
+        if (not reading_dict["slow_queries_count"].available and filters.time_period != TimePeriod.CUSTOM
+                and filters.service in (None, "All services", "Todos os serviços", "Cloud SQL")):
             try:
                 hours = max(1, _period_to_seconds(filters.time_period) // 3600)
-                sq_res = await self._gcp.get_slow_query_logs(hours=hours)
-                reading_dict["slow_queries_count"] = MetricReading(
-                    current_value=float(sq_res.total_count),
-                    unit="count",
-                    status=MetricStatus.HEALTHY,
-                    available=True,
-                    source="gcp",
-                    reason=None,
-                    bucket_seconds=3600,
-                    gcp_metric_types=[],
-                    timestamps=[],
-                    resources=[],
+                sq_res = await self._client_for_project(target_project).get_slow_query_logs(
+                    hours=hours,
+                    database_id=filters.resource_id if filters.resource_id else None,
                 )
+                if sq_res.error is None:
+                    reading_dict["slow_queries_count"] = MetricReading(
+                        current_value=float(sq_res.total_count),
+                        unit="count",
+                        status=MetricStatus.HEALTHY,
+                        available=True,
+                        source="gcp",
+                        reason="At least this many slow queries; log result was capped" if sq_res.capped else None,
+                        bucket_seconds=3600,
+                        gcp_metric_types=[],
+                        timestamps=[],
+                        resources=[],
+                    )
             except Exception:
                 pass
 
@@ -1309,26 +1424,6 @@ class CachedGCPMetricsService:
         readings = await asyncio.gather(*tasks)
         reading_dict = dict(zip([name for name, _ in definitions], readings))
 
-        # Cloud Logging fallback for token count if metric was unavailable
-        if not reading_dict["daily_token_count"].available or reading_dict["daily_token_count"].current_value == 0:
-            try:
-                t_res = await self._gcp.get_token_usage_logs(hours=24)
-                if t_res.total_count > 0:
-                    reading_dict["daily_token_count"] = MetricReading(
-                        current_value=float(t_res.total_count * 1000),  # estimate from logs
-                        unit="tokens",
-                        status=MetricStatus.HEALTHY,
-                        available=True,
-                        source="gcp",
-                        reason=None,
-                        bucket_seconds=86400,
-                        gcp_metric_types=[],
-                        timestamps=[],
-                        resources=[],
-                    )
-            except Exception:
-                pass
-
         return TokenUsageMetrics(
             environment=effective_env,
             timestamp=datetime.now(timezone.utc),
@@ -1387,22 +1482,6 @@ class CachedGCPMetricsService:
                     source="gcp",
                 )
 
-        # Pull error logs from Cloud Logging for error_counts_4xx_5xx
-        if not reading_dict["error_counts_4xx_5xx"].available or reading_dict["error_counts_4xx_5xx"].current_value == 0:
-            try:
-                hours = max(1, _period_to_seconds(filters.time_period) // 3600)
-                err_res = await self._gcp.get_error_logs(hours=hours)
-                reading_dict["error_counts_4xx_5xx"] = MetricReading(
-                    current_value=float(err_res.total_count),
-                    unit="count",
-                    status=MetricStatus.CRITICAL if err_res.total_count > 50 else (MetricStatus.WARNING if err_res.total_count > 10 else MetricStatus.HEALTHY),
-                    available=True,
-                    source="gcp",
-                    reason="Estimated via bounded Cloud Logging error stream" if err_res.estimated else None,
-                )
-            except Exception:
-                pass
-
         return SlaMetrics(
             environment=effective_env,
             timestamp=datetime.now(timezone.utc),
@@ -1412,113 +1491,6 @@ class CachedGCPMetricsService:
     # ------------------------------------------------------------------
     # Local Alert Evaluation Engine
     # ------------------------------------------------------------------
-
-    def evaluate_local_alerts(
-        self,
-        database: DatabaseMetrics,
-        cloud: CloudMetrics,
-        storage: StorageMetrics,
-        processing: ProcessingMetrics,
-        tokens: TokenUsageMetrics,
-        sla: SlaMetrics,
-    ) -> List[AlertRule]:
-        """Evaluate threshold configurations locally on server-side real readings.
-
-        Zero calls to GCP Alerting APIs.
-        """
-        active_alerts: List[AlertRule] = []
-
-        # Standard operational threshold guardrails
-        checks = [
-            (
-                "database.cpu-io",
-                database.cpu_io_percent,
-                70.0,
-                85.0,
-                ThresholdOperator.GREATER_THAN,
-                "Scale database tier or optimize slow queries causing CPU saturation.",
-            ),
-            (
-                "database.connections",
-                database.active_connections,
-                650.0,
-                850.0,
-                ThresholdOperator.GREATER_THAN,
-                "Increase Cloud SQL connection pool limits or enable connection pooling (PgBouncer).",
-            ),
-            (
-                "cloud.cpu",
-                cloud.cpu_percent,
-                75.0,
-                90.0,
-                ThresholdOperator.GREATER_THAN,
-                "Scale out Compute Engine instance group or investigate runaway processes.",
-            ),
-            (
-                "cloud.uptime",
-                cloud.uptime_percent,
-                99.9,
-                99.5,
-                ThresholdOperator.LESS_THAN,
-                "Investigate VM node reboots and zone availability incidents.",
-            ),
-            (
-                "storage.buckets",
-                storage.bucket_volume_usage_percent,
-                75.0,
-                90.0,
-                ThresholdOperator.GREATER_THAN,
-                "Enforce object lifecycle rules or archive cold objects to Nearline/Coldline.",
-            ),
-            (
-                "processing.failures",
-                processing.failure_counts,
-                10.0,
-                25.0,
-                ThresholdOperator.GREATER_THAN,
-                "Review BigQuery job error logs and query syntax/quota exhaustion.",
-            ),
-            (
-                "tokens.error-rate",
-                tokens.error_rate_percent,
-                1.0,
-                5.0,
-                ThresholdOperator.GREATER_THAN,
-                "Inspect Vertex AI model invocation latencies and quota limits.",
-            ),
-            (
-                "sla.availability",
-                sla.availability_percent,
-                99.9,
-                99.5,
-                ThresholdOperator.LESS_THAN,
-                "Initiate high-severity platform incident triage.",
-            ),
-        ]
-
-        for metric_id, reading, warn_th, crit_th, op, action in checks:
-            if not reading.available:
-                continue
-            config = MetricThresholdConfig(
-                metric_name=metric_id,
-                warning_threshold=warn_th,
-                critical_threshold=crit_th,
-                operator=op,
-            )
-            evaluated_status = config.evaluate(reading.current_value)
-            if evaluated_status != MetricStatus.HEALTHY:
-                reading.status = evaluated_status
-                sev = AlertSeverity.CRITICAL if evaluated_status == MetricStatus.CRITICAL else AlertSeverity.WARNING
-                active_alerts.append(
-                    AlertRule(
-                        metric_id=metric_id,
-                        current_value=reading.current_value,
-                        severity=sev,
-                        suggested_action=action,
-                    )
-                )
-
-        return active_alerts
 
     # ------------------------------------------------------------------
     # Root Overview Aggregator
@@ -1543,17 +1515,14 @@ class CachedGCPMetricsService:
         sla = await self.build_sla_metrics(filters, target_project, filters.environment, cloud, db)
 
         # Local threshold alert evaluation
-        active_alerts = self.evaluate_local_alerts(db, cloud, storage, proc, tokens, sla)
+        active_alerts = evaluate_local_alerts(db, cloud, storage, proc, tokens, sla)
 
         period_seconds = _period_to_seconds(filters.time_period)
         bucket_sec = calculate_bucket_seconds(period_seconds, filters.bucket)
 
         # Overall data source provenance
-        all_readings = [
-            db.qps, db.cpu_io_percent, cloud.cpu_percent, storage.total_usage,
-            proc.queued_jobs, tokens.daily_token_count, sla.availability_percent,
-        ]
-        sources = {r.source for r in all_readings}
+        sources = {reading.source for section in (db, cloud, storage, proc, tokens, sla)
+                   for _, reading in section if isinstance(reading, MetricReading) and reading.available}
         data_source = "cache" if "cache" in sources and "gcp" not in sources else ("gcp" if "gcp" in sources else "unavailable")
 
         payload = DashboardMetricsPayload(
@@ -1673,10 +1642,14 @@ class CachedGCPMetricsService:
     ) -> Dict[str, Any]:
         """Legacy /router compatibility fetcher."""
         effective_ttl = ttl or self.default_ttl
-        cache_key = RedisCache.build_key(environment, category, period)
+        target_project, _, _ = self.resolve_environment(environment)
+        scope = hashlib.sha256(
+            json.dumps([target_project, kwargs], sort_keys=True).encode("utf-8")
+        ).hexdigest()[:16]
+        cache_key = RedisCache.build_key(environment, category, period, scope)
 
         async def _fetch() -> Dict[str, Any]:
-            return await self._dispatch_category(category, period, **kwargs)
+            return await self._dispatch_category(category, period, project_id=target_project, **kwargs)
 
         try:
             result, from_cache = await self.cache.get_or_fetch_with_meta(
@@ -1700,24 +1673,25 @@ class CachedGCPMetricsService:
                 "data_source": "offline",
             }
 
-    async def _dispatch_category(self, category: str, period: str, **kwargs: Any) -> Dict[str, Any]:
+    async def _dispatch_category(self, category: str, period: str, project_id: Optional[str] = None, **kwargs: Any) -> Dict[str, Any]:
         cat = category.lower()
+        monitoring = self._client_for_project(project_id or self.project_id)
         if cat == "cloud":
-            return await self._gcp.get_compute_metrics(period=period, **kwargs)
+            return await monitoring.get_compute_metrics(period=period, **kwargs)
         if cat == "database":
-            return await self._gcp.get_cloudsql_metrics(period=period, **kwargs)
+            return await monitoring.get_cloudsql_metrics(period=period, **kwargs)
         if cat == "storage":
-            return await self._gcp.get_storage_metrics(period=period, **kwargs)
+            return await monitoring.get_storage_metrics(period=period, **kwargs)
         if cat in ("tokens", "token_usage"):
             hours = max(1, _period_to_seconds(period) // 3600)
-            res = await self._gcp.get_token_usage_logs(hours=hours, **kwargs)
+            res = await monitoring.get_token_usage_logs(hours=hours, **kwargs)
             return res.to_dict()
 
         metric_types = [(name, mt) for (c, name), mt in METRIC_DESCRIPTORS.items() if c == cat]
         series_map: Dict[str, Any] = {}
         for name, metric_type in metric_types:
             try:
-                series_list = await self._gcp.query_metric(metric_type=metric_type, period=period)
+                series_list = await monitoring.query_metric(metric_type=metric_type, period=period)
                 for s in series_list:
                     s.category = cat
                     s.metric_name = name
@@ -1727,23 +1701,27 @@ class CachedGCPMetricsService:
         return {"category": category, "period": period, "metrics": series_map}
 
     async def get_token_usage(self, environment: str, hours: int = 24, ttl: int = 120, **kwargs: Any) -> Dict[str, Any]:
-        cache_key = RedisCache.build_key(environment, "tokens", f"{hours}h", "logs")
+        target_project, _, _ = self.resolve_environment(environment)
+        cache_key = RedisCache.build_key(environment, "tokens", f"{hours}h", target_project, "logs")
         async def _fetch():
-            res = await self._gcp.get_token_usage_logs(hours=hours, **kwargs)
+            res = await self._client_for_project(target_project).get_token_usage_logs(hours=hours, **kwargs)
             return res.to_dict()
         return await self.cache.get_or_fetch(cache_key, _fetch, ttl=ttl)
 
     async def get_slow_queries(self, environment: str, hours: int = 24, threshold_ms: int = 1000, ttl: int = 60, **kwargs: Any) -> Dict[str, Any]:
-        cache_key = RedisCache.build_key(environment, "database", f"{hours}h", f"slow_queries_{threshold_ms}ms")
+        target_project, _, _ = self.resolve_environment(environment)
+        scope = hashlib.sha256(json.dumps(kwargs, sort_keys=True).encode("utf-8")).hexdigest()[:16]
+        cache_key = RedisCache.build_key(environment, "database", f"{hours}h", target_project, f"slow_queries_{threshold_ms}ms", scope)
         async def _fetch():
-            res = await self._gcp.get_slow_query_logs(hours=hours, threshold_ms=threshold_ms, **kwargs)
+            res = await self._client_for_project(target_project).get_slow_query_logs(hours=hours, threshold_ms=threshold_ms, **kwargs)
             return res.to_dict()
         return await self.cache.get_or_fetch(cache_key, _fetch, ttl=ttl)
 
     async def get_error_logs(self, environment: str, hours: int = 24, ttl: int = 60, **kwargs: Any) -> Dict[str, Any]:
-        cache_key = RedisCache.build_key(environment, "sla", f"{hours}h", "error_logs")
+        target_project, _, _ = self.resolve_environment(environment)
+        cache_key = RedisCache.build_key(environment, "sla", f"{hours}h", target_project, "error_logs", hashlib.sha256(json.dumps(kwargs, sort_keys=True).encode()).hexdigest()[:16])
         async def _fetch():
-            res = await self._gcp.get_error_logs(hours=hours, **kwargs)
+            res = await self._client_for_project(target_project).get_error_logs(hours=hours, **kwargs)
             return res.to_dict()
         return await self.cache.get_or_fetch(cache_key, _fetch, ttl=ttl)
 
@@ -1757,7 +1735,9 @@ class CachedGCPMetricsService:
         for env in environments:
             for cat in categories:
                 for per in periods:
-                    key = RedisCache.build_key(env, cat, per)
+                    target_project, _, _ = self.resolve_environment(env)
+                    scope = hashlib.sha256(json.dumps([target_project, {}], sort_keys=True).encode("utf-8")).hexdigest()[:16]
+                    key = RedisCache.build_key(env, cat, per, scope)
                     try:
                         await self.get_metrics(env, cat, per)
                         warmed.append(key)

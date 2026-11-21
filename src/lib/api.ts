@@ -3,7 +3,7 @@
  *
  * Thin fetch wrapper that:
  *  - Reads VITE_API_BASE_URL from env (empty = same-origin, Vite proxies /api in dev)
- *  - Injects X-User-Role header from VITE_USER_ROLE
+ *  - Sends the authenticated access token
  *  - Maps all HTTP 4xx/5xx responses to typed ApiError exceptions
  *  - Provides typed helpers for every backend endpoint
  */
@@ -13,7 +13,10 @@
 // ---------------------------------------------------------------------------
 
 const BASE_URL = (import.meta.env.VITE_API_BASE_URL as string | undefined) ?? '';
-const USER_ROLE = (import.meta.env.VITE_USER_ROLE as string | undefined) ?? 'VIEW_ONLY';
+export const TOKEN_KEY = 'sb100.access';
+export function verifyAccess(authorization: string) {
+  return apiFetch<{email: string}>('/session', {headers: {Authorization: authorization}});
+}
 
 // ---------------------------------------------------------------------------
 // Error type
@@ -35,11 +38,12 @@ export class ApiError extends Error {
 
 async function apiFetch<T>(path: string, init: RequestInit = {}): Promise<T> {
   const url = `${BASE_URL}/api/v1${path}`;
+  const access = sessionStorage.getItem(TOKEN_KEY) ?? '';
   const res = await fetch(url, {
     ...init,
     headers: {
       'Content-Type': 'application/json',
-      'X-User-Role': USER_ROLE,
+      Authorization: access.startsWith('Basic ') ? access : 'Bearer ' + access,
       ...(init.headers ?? {}),
     },
   });
@@ -149,6 +153,7 @@ export interface TokenUsageResponse {
   total_count: number;
   capped?: boolean;
   estimated?: boolean;
+  error?: string | null;
   fetched_at: string;
   entries: TokenUsageEntry[];
 }
@@ -167,6 +172,7 @@ export interface SlowQueryResponse {
   total_count: number;
   capped?: boolean;
   estimated?: boolean;
+  error?: string | null;
   fetched_at: string;
   entries: SlowQueryEntry[];
 }
@@ -185,6 +191,7 @@ export interface ErrorLogResponse {
   total_count: number;
   capped?: boolean;
   estimated?: boolean;
+  error?: string | null;
   fetched_at: string;
   entries: ErrorLogEntry[];
 }
@@ -278,37 +285,40 @@ export function fetchOverview(
   env: Environment,
   period: Period,
   options: { service?: string; resourceId?: string; bucket?: string; source?: string } = {},
+  signal?: AbortSignal,
 ): Promise<OverviewResponse> {
   const params = new URLSearchParams({ env, period });
   if (options.service) params.set('service', options.service);
   if (options.resourceId) params.set('resource', options.resourceId);
   if (options.bucket) params.set('bucket', options.bucket);
   if (options.source) params.set('source', options.source);
-  return apiFetch(`/metrics/overview?${params}`);
+  return apiFetch(`/metrics/overview?${params}`, { signal });
 }
 
 /** GET /api/v1/gcp/resources */
 export function fetchGcpResources(
   options: { env?: Environment; service?: string; search?: string } = {},
+  signal?: AbortSignal,
 ): Promise<GcpResourceMetadata[]> {
   const params = new URLSearchParams();
   if (options.env) params.set('env', options.env);
   if (options.service) params.set('service', options.service);
   if (options.search) params.set('search', options.search);
   const q = params.toString();
-  return apiFetch(`/gcp/resources${q ? `?${q}` : ''}`);
+  return apiFetch(`/gcp/resources${q ? `?${q}` : ''}`, { signal });
 }
 
 /** GET /api/v1/gcp/logs/errors */
 export function fetchErrorLogs(
   env: Environment,
   options: { hours?: number; maxEntries?: number; serviceFilter?: string } = {},
+  signal?: AbortSignal,
 ): Promise<ErrorLogResponse> {
   const params = new URLSearchParams({ env });
   if (options.hours) params.set('hours', String(options.hours));
   if (options.maxEntries) params.set('max_entries', String(options.maxEntries));
   if (options.serviceFilter) params.set('service_filter', options.serviceFilter);
-  return apiFetch(`/gcp/logs/errors?${params}`);
+  return apiFetch(`/gcp/logs/errors?${params}`, { signal });
 }
 
 /** GET /api/v1/alerts/active */
@@ -340,13 +350,14 @@ export function fetchGcpMetrics(
     databaseId?: string;
     bucketName?: string;
   } = {},
+  signal?: AbortSignal,
 ): Promise<GcpMetricsResponse> {
   const params = new URLSearchParams({ env, period });
   if (options.ttl !== undefined) params.set('ttl', String(options.ttl));
   if (options.instanceId) params.set('instance_id', options.instanceId);
   if (options.databaseId) params.set('database_id', options.databaseId);
   if (options.bucketName) params.set('bucket_name', options.bucketName);
-  return apiFetch(`/gcp/metrics/${category}?${params}`);
+  return apiFetch(`/gcp/metrics/${category}?${params}`, { signal });
 }
 
 /** GET /api/v1/gcp/metrics/tokens/usage */
@@ -354,26 +365,28 @@ export function fetchTokenUsage(
   env: Environment,
   hours = 24,
   ttl = 120,
+  signal?: AbortSignal,
 ): Promise<TokenUsageResponse> {
-  return apiFetch(`/gcp/metrics/tokens/usage?env=${env}&hours=${hours}&ttl=${ttl}`);
+  return apiFetch(`/gcp/metrics/tokens/usage?env=${env}&hours=${hours}&ttl=${ttl}`, { signal });
 }
 
 /** GET /api/v1/gcp/metrics/database/slow-queries */
 export function fetchSlowQueries(
   env: Environment,
   options: { hours?: number; thresholdMs?: number; databaseId?: string; ttl?: number } = {},
+  signal?: AbortSignal,
 ): Promise<SlowQueryResponse> {
   const params = new URLSearchParams({ env });
   if (options.hours) params.set('hours', String(options.hours));
   if (options.thresholdMs) params.set('threshold_ms', String(options.thresholdMs));
   if (options.databaseId) params.set('database_id', options.databaseId);
   if (options.ttl) params.set('ttl', String(options.ttl));
-  return apiFetch(`/gcp/metrics/database/slow-queries?${params}`);
+  return apiFetch(`/gcp/metrics/database/slow-queries?${params}`, { signal });
 }
 
 /** GET /api/v1/gcp/health */
-export function fetchGcpHealth(): Promise<GcpHealthResponse> {
-  return apiFetch('/gcp/health');
+export function fetchGcpHealth(signal?: AbortSignal): Promise<GcpHealthResponse> {
+  return apiFetch('/gcp/health', { signal });
 }
 
 /** POST /api/v1/gcp/cache/flush */
@@ -394,4 +407,41 @@ export function prewarmCache(options: {
   );
   (options.periods ?? ['1h', '24h']).forEach((p) => params.append('periods', p));
   return apiFetch(`/gcp/cache/prewarm?${params}`, { method: 'POST' });
+}
+
+export interface CatalogMetric { type: string; name: string; unit: string }
+export interface CatalogPage {
+  project: string;
+  start: string;
+  scope: string;
+  warning: string | null;
+  series: Array<{
+    unit?: string;
+    resource: { type: string; labels?: Record<string, string> };
+    metric: { labels?: Record<string, string> };
+    points: Array<{ interval: { end_time: string }; value: Record<string, unknown> }>;
+  }>;
+  end: string;
+  next_page_token: string;
+  warnings: string[];
+}
+
+export function getMetricCatalog(env: Environment, activeOnly: boolean, signal: AbortSignal, pageToken = '') {
+  const params = new URLSearchParams({ env, active_only: String(activeOnly), page_token: pageToken });
+  return apiFetch<{ project: string; scope: string; warning: string | null;
+    metrics: CatalogMetric[]; next_page_token: string }>(`/gcp/catalog?${params}`, { signal });
+}
+
+export function getCatalogSeries(env: Environment, period: Period, type: string,
+                                 cursor: { end: string; token: string } | null, signal: AbortSignal) {
+  const params = new URLSearchParams({ env, period, metric_type: type });
+  if (cursor) {
+    params.set('end', cursor.end);
+    params.set('page_token', cursor.token);
+  }
+  return apiFetch<CatalogPage>(`/gcp/catalog/series?${params}`, { signal });
+}
+
+export function fetchQdrantMetrics(env: Environment, signal: AbortSignal) {
+  return apiFetch<{provider: string; collections: number}>(`/qdrant/metrics?env=${env}`, {signal});
 }

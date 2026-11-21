@@ -28,14 +28,16 @@ from schemas import (
     TimePeriod,
     UserRole,
 )
-from services.audit_service import audit_service
+from services.governance import audit_entries
 from services.metrics_store import metrics_store
 
 
 @pytest.fixture
 def client() -> TestClient:
     """Fixture providing a FastAPI TestClient."""
-    return TestClient(app)
+    client = TestClient(app, headers={"Authorization": "Bearer test-viewer"})
+    client.params = {"source": "demo"}
+    return client
 
 
 # ============================================================================
@@ -216,7 +218,7 @@ def test_threshold_update_forbidden_for_view_only(client: TestClient) -> None:
 
 def test_threshold_update_allowed_for_infra_admin(client: TestClient) -> None:
     """Verify that INFRA_ADMIN users can mutate thresholds, with audit recording."""
-    initial_audit_count = audit_service.count()
+    initial_audit_count = len(audit_entries())
 
     payload = {
         "metric_name": "cloud.cpu_percent",
@@ -233,7 +235,7 @@ def test_threshold_update_allowed_for_infra_admin(client: TestClient) -> None:
         "/api/v1/thresholds",
         json=payload,
         headers={
-            "X-User-Role": "INFRA_ADMIN",
+            "Authorization": "Bearer test-admin",
             "X-User-Id": "lead-infra-admin@gcp-corp.internal",
         },
     )
@@ -248,7 +250,7 @@ def test_threshold_update_allowed_for_infra_admin(client: TestClient) -> None:
     assert "X-Audit-Log-Id" in response.headers
 
     # Verify audit service recorded the change
-    assert audit_service.count() == initial_audit_count + 1
+    assert len(audit_entries()) == initial_audit_count + 1
 
 
 def test_threshold_update_allowed_with_bearer_token(client: TestClient) -> None:
@@ -264,7 +266,7 @@ def test_threshold_update_allowed_with_bearer_token(client: TestClient) -> None:
     response = client.post(
         "/api/v1/thresholds",
         json=payload,
-        headers={"Authorization": "Bearer infra-admin-token"},
+        headers={"Authorization": "Bearer test-admin"},
     )
     assert response.status_code == 200
     assert response.headers.get("X-Audit-Recorded") == "true"
@@ -277,6 +279,7 @@ def test_threshold_update_allowed_with_bearer_token(client: TestClient) -> None:
 
 def test_audit_logs_query(client: TestClient) -> None:
     """Verify audit logs retrieval and filtering."""
+    test_threshold_update_allowed_for_infra_admin(client)
     response = client.get("/api/v1/audit-logs")
     assert response.status_code == 200
     logs = response.json()
@@ -372,3 +375,36 @@ def test_export_pdf(client: TestClient) -> None:
     # PDF files start with %PDF- header magic bytes
     assert pdf_bytes.startswith(b"%PDF-")
     assert len(pdf_bytes) > 1000
+
+
+def test_live_routes_require_identity_and_configured_gcp():
+    client = TestClient(app)
+    assert client.get("/api/v1/session").status_code == 401
+    client.headers.update({"Authorization": "Bearer test-viewer"})
+    assert client.get("/api/v1/session").json()["role"] == "VIEW_ONLY"
+    for path in ("metrics/overview", "metrics/cloud/timeseries", "alerts/active", "export"):
+        assert client.get("/api/v1/" + path).status_code == 503
+
+
+def test_saved_rule_controls_cloud_alerts(client):
+    from services.alerts import evaluate_local_alerts
+    from schemas import DashboardFilterParams
+    payload = metrics_store.get_overview_payload(DashboardFilterParams())
+    payload.cloud.cpu_percent.current_value = 90
+    assert client.post("/api/v1/thresholds", headers={"Authorization": "Bearer test-admin"},
+                       json={"metric_name": "cloud.cpu_percent", "operator": ">",
+                             "warning_threshold": 95, "critical_threshold": 99}).is_success
+    alerts = evaluate_local_alerts(payload.database, payload.cloud, payload.storage,
+                                  payload.processing, payload.tokens, payload.sla)
+    assert not any(a.metric_id == "cloud.cpu" for a in alerts)
+    assert client.get("/api/v1/audit-logs").json()[0]["user_id"] == "admin@example.com"
+
+
+@pytest.mark.parametrize("email, role", [("viewer@dashboard", "VIEW_ONLY"), ("admin@dashboard", "INFRA_ADMIN")])
+def test_temporary_login_without_config(monkeypatch, email, role):
+    for profile in ("VIEW_ONLY", "INFRA_ADMIN"):
+        for field in ("TOKEN", "EMAIL"):
+            monkeypatch.delenv(f"DASHBOARD_{profile}_{field}", raising=False)
+    client = TestClient(app)
+    assert client.get("/api/v1/session", auth=(email, "123")).json() == {"email": email, "role": role}
+    assert client.get("/api/v1/session", auth=(email, "incorrect")).status_code == 401

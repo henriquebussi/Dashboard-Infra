@@ -35,7 +35,7 @@ from services.resource_inventory import resource_inventory
 
 @pytest.fixture
 def client() -> TestClient:
-    return TestClient(app)
+    return TestClient(app, headers={"Authorization": "Bearer test-viewer"})
 
 
 def test_metric_registry_definitions() -> None:

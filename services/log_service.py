@@ -38,6 +38,7 @@ class BoundedLogResult:
     total_count: int
     capped: bool = False
     estimated: bool = False
+    error: Optional[str] = None
     fetched_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
     def to_dict(self) -> Dict[str, Any]:
@@ -46,6 +47,7 @@ class BoundedLogResult:
             "total_count": self.total_count,
             "capped": self.capped,
             "estimated": self.estimated,
+            "error": self.error,
             "fetched_at": self.fetched_at.isoformat(),
             "entries": self.entries,
         }
@@ -80,7 +82,7 @@ class GCPLogService:
     ) -> BoundedLogResult:
         """Fetch slow query log records from Cloud SQL instances."""
         if not _LOGGING_AVAILABLE:
-            return BoundedLogResult(query_type="slow_queries", entries=[], total_count=0)
+            return BoundedLogResult(query_type="slow_queries", entries=[], total_count=0, error="Cloud Logging SDK unavailable")
 
         loop = asyncio.get_running_loop()
         start_dt = datetime.now(timezone.utc) - timedelta(hours=hours)
@@ -143,7 +145,7 @@ class GCPLogService:
                 )
             except Exception as exc:
                 logger.warning("[LogService] slow_queries query failed: %s", exc)
-                return BoundedLogResult(query_type="slow_queries", entries=[], total_count=0)
+                return BoundedLogResult(query_type="slow_queries", entries=[], total_count=0, error=str(exc))
 
         return await loop.run_in_executor(None, _sync)
 
@@ -155,7 +157,7 @@ class GCPLogService:
     ) -> BoundedLogResult:
         """Fetch Vertex AI model token usage events from Cloud Logging sinks."""
         if not _LOGGING_AVAILABLE:
-            return BoundedLogResult(query_type="token_usage", entries=[], total_count=0)
+            return BoundedLogResult(query_type="token_usage", entries=[], total_count=0, error="Cloud Logging SDK unavailable")
 
         loop = asyncio.get_running_loop()
         start_dt = datetime.now(timezone.utc) - timedelta(hours=hours)
@@ -202,7 +204,7 @@ class GCPLogService:
                 )
             except Exception as exc:
                 logger.warning("[LogService] token_usage query failed: %s", exc)
-                return BoundedLogResult(query_type="token_usage", entries=[], total_count=0)
+                return BoundedLogResult(query_type="token_usage", entries=[], total_count=0, error=str(exc))
 
         return await loop.run_in_executor(None, _sync)
 
@@ -214,7 +216,7 @@ class GCPLogService:
     ) -> BoundedLogResult:
         """Fetch error log records (severity >= ERROR) with bounded capping."""
         if not _LOGGING_AVAILABLE:
-            return BoundedLogResult(query_type="error_logs", entries=[], total_count=0)
+            return BoundedLogResult(query_type="error_logs", entries=[], total_count=0, error="Cloud Logging SDK unavailable")
 
         loop = asyncio.get_running_loop()
         start_dt = datetime.now(timezone.utc) - timedelta(hours=hours)
@@ -270,6 +272,6 @@ class GCPLogService:
                 )
             except Exception as exc:
                 logger.warning("[LogService] error_logs query failed: %s", exc)
-                return BoundedLogResult(query_type="error_logs", entries=[], total_count=0)
+                return BoundedLogResult(query_type="error_logs", entries=[], total_count=0, error=str(exc))
 
         return await loop.run_in_executor(None, _sync)

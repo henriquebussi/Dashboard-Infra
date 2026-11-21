@@ -1,3 +1,7 @@
+import { QdrantCard } from '@/features/dashboard/QdrantCard';
+import { ProjectTelemetry } from '@/features/dashboard/ProjectTelemetry';
+import { MetricSourceOverview } from '@/features/dashboard/MetricSourceOverview';
+import { MetricExplorer } from "@/features/dashboard/MetricExplorer";
 import { useMemo, useState } from 'react';
 import { useLocation } from 'wouter';
 import {
@@ -39,11 +43,9 @@ import {
   type SectionData,
 } from '@/features/dashboard/mock-data';
 import {
-  useGcpMetrics,
   useGcpHealth,
   useOverview,
   envToBackend,
-  type UseGcpMetricsResult,
   type UseOverviewResult,
 } from '@/lib/useMetrics';
 import {
@@ -52,7 +54,7 @@ import {
   getOverviewAvailability,
   getOverviewAvailabilityChange,
 } from '@/lib/overview';
-import type { Bucket, MetricCategory } from '@/lib/api';
+import type { Bucket } from '@/lib/api';
 
 const logoUrl = `${import.meta.env.BASE_URL}CCDSB100.jpg`;
 const ALL_SERVICES = 'Todos os serviços';
@@ -77,15 +79,6 @@ function readInitialDataMode(): DataMode {
 // ---------------------------------------------------------------------------
 // Section → backend category mapping
 // ---------------------------------------------------------------------------
-const SECTION_TO_CATEGORY: Record<string, MetricCategory> = {
-  database: 'database',
-  cloud: 'cloud',
-  storage: 'storage',
-  processing: 'processing',
-  tokens: 'tokens',
-  sla: 'sla',
-};
-
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -170,7 +163,7 @@ function unavailableMetric(metric: Metric): Metric {
 function sanitizeRealSections(input: SectionData[]): SectionData[] {
   return input.map((section) => ({
     ...section,
-    metrics: section.metrics.map((metric) => (metric.isLive ? metric : unavailableMetric(metric))),
+    metrics: section.metrics.map((metric) => (metric.isLive && metric.source !== 'demo' ? metric : unavailableMetric(metric))),
     series: section.series.map((entry) => ({
       ...entry,
       values: entry.values.map(() => 0),
@@ -197,11 +190,9 @@ function getRealScopedSection(section: SectionData, service: string, search: str
 
 function DataSourceBadge({
   overviewResult,
-  liveResult,
   dataMode,
 }: {
   overviewResult: UseOverviewResult;
-  liveResult: UseGcpMetricsResult;
   dataMode: DataMode;
 }) {
   if (dataMode === 'mock') {
@@ -229,8 +220,8 @@ function DataSourceBadge({
     );
   }
   if (overviewResult.data) {
-    const liveGcp = Boolean(liveResult.data) && !liveResult.error;
-    const liveCached = liveGcp && liveResult.data?.data_source === 'cache';
+    const liveGcp = overviewResult.data.data_source === 'gcp';
+    const liveCached = overviewResult.data.data_source === 'cache';
     return (
       <div className="mt-1 flex items-center gap-1.5 text-[11px] font-medium text-[#596a60] md:justify-end">
         <span
@@ -238,7 +229,7 @@ function DataSourceBadge({
             liveCached ? 'bg-[#c2832b]' : 'bg-[#4a9867]'
           }`}
         />
-        {liveCached ? 'API + GCP em cache' : liveGcp ? 'API + GCP ao vivo' : 'API conectada · dados do backend'}
+        {liveCached ? 'API + GCP em cache' : liveGcp ? 'API + GCP ao vivo' : overviewResult.data.data_source === 'unavailable' ? 'API conectada · sem amostras GCP nesta janela' : 'API conectada · dados do backend'}
         {overviewResult.stale && <span className="text-[#9aa49e]">(atualizando)</span>}
       </div>
     );
@@ -276,10 +267,6 @@ function Dashboard() {
     { bucket: bucket === 'auto' ? undefined : bucket, source: realMode ? undefined : 'demo' },
     true,
   );
-
-  // Live GCP data for the active section only
-  const liveCategory = SECTION_TO_CATEGORY[activeSection] ?? 'database';
-  const liveResult = useGcpMetrics(liveCategory, backendEnv, period, realMode);
 
   // GCP + Redis health
   const { data: healthData } = useGcpHealth(60_000, realMode);
@@ -331,9 +318,7 @@ function Dashboard() {
     ? getOverviewAvailabilityChange(overviewResult.data) ?? '—'
     : '+0.03%';
 
-  const liveHasSeries =
-    Boolean(liveResult.data) &&
-    Object.values(liveResult.data?.metrics ?? {}).some((value) => Array.isArray(value) && value.length > 0);
+  const liveHasSeries = overviewResult.data?.data_source === 'gcp';
 
   const overviewSource: DataSource = !realMode
     ? 'mock'
@@ -341,11 +326,8 @@ function Dashboard() {
       ? 'api'
       : 'offline';
 
-  function sourceForMetric(sectionId: string, metric: Metric): DataSource {
+  function sourceForMetric(metric: Metric): DataSource {
     if (!realMode) return 'mock';
-    if (sectionId === activeSection && liveHasSeries && metric.isLive) {
-      return liveResult.data?.data_source === 'cache' ? 'cache' : 'live';
-    }
     if (metric.isLive) return (metric.source as DataSource) ?? 'api';
     return 'offline';
   }
@@ -567,7 +549,7 @@ function Dashboard() {
             <div className="flex items-center justify-between gap-4 md:justify-end">
               <div className="text-left md:text-right">
                 <div className="font-mono text-[10px] uppercase tracking-[.11em] text-[#99a49d]">Fonte de dados</div>
-                <DataSourceBadge overviewResult={overviewResult} liveResult={liveResult} dataMode={dataMode} />
+                <DataSourceBadge overviewResult={overviewResult} dataMode={dataMode} />
               </div>
             </div>
           </section>
@@ -603,6 +585,7 @@ function Dashboard() {
                     <CheckCircle2 className="h-[17px] w-[17px]" />
                   </span>
                   <div>
+                    <p className="text-xs text-muted-foreground">Fonte · {realMode ? "GCP" : "Demonstração"}</p>
                     <div className="text-[10px] font-bold uppercase tracking-[.11em] text-[#658071]">
                       Disponibilidade da plataforma
                     </div>
@@ -627,6 +610,7 @@ function Dashboard() {
                     <Cpu className="h-[17px] w-[17px]" />
                   </span>
                   <div>
+                    <p className="text-xs text-muted-foreground">Fonte · {realMode ? "GCP" : "Demonstração"}</p>
                     <div className="text-[10px] font-bold uppercase tracking-[.11em] text-[#7e8a82]">
                       Recursos no escopo
                     </div>
@@ -656,6 +640,7 @@ function Dashboard() {
                     <Activity className="h-[17px] w-[17px]" />
                   </span>
                   <div>
+                    <p className="text-xs text-muted-foreground">Fonte · {realMode ? "API do dashboard · GCP" : "Demonstração"}</p>
                     <div className="text-[10px] font-bold uppercase tracking-[.11em] text-[#7e8a82]">Sinais ativos</div>
                     <div
                       className="mt-1 font-mono text-[20px] font-medium tracking-[-.04em] text-[#26382e]"
@@ -696,6 +681,9 @@ function Dashboard() {
               search={search}
               setSearch={setSearch}
             />
+            {realMode && <ProjectTelemetry key={backendEnv} env={backendEnv} period={period} />}
+            {realMode && <MetricSourceOverview />}
+            {realMode && <MetricExplorer env={backendEnv} period={period} />}
             <div className="px-4 pt-4 md:px-7">
               <Tabs value={active?.id ?? ''} onValueChange={setActiveSection}>
                 <TabsList
@@ -742,6 +730,7 @@ function Dashboard() {
                       </div>
                     </div>
 
+                    {realMode && section.id === 'database' && service === ALL_SERVICES && !search.trim() && <QdrantCard key={backendEnv} env={backendEnv} />}
                     {section.metrics.length > 0 ? (
                       <div className="grid grid-cols-1 gap-3 pb-5 sm:grid-cols-2 xl:grid-cols-3">
                         {section.metrics.map((item) => (
@@ -751,7 +740,7 @@ function Dashboard() {
                             period={period}
                             multiplier={environment === 'Produção' ? 1 : environment === 'Homologação' ? 0.64 : 0.37}
                             onSelect={setSelectedMetric}
-                            dataSource={sourceForMetric(section.id, item)}
+                            dataSource={sourceForMetric(item)}
                           />
                         ))}
                       </div>
@@ -896,11 +885,11 @@ function Dashboard() {
                 <span>
                   {!realMode
                     ? 'Modo demonstração · dados mock locais'
-                    : liveResult.data && !liveResult.error
+                    : liveHasSeries
                       ? 'Métricas em tempo real · GCP Cloud Monitoring API v3'
                       : overviewResult.data
                         ? 'Métricas agregadas · API /api/v1/metrics/overview'
-                        : 'Métricas são amostras operacionais de demonstração'}
+                        : 'Aguardando dados reais do GCP'}
                 </span>
               </div>
               <div className="flex items-center gap-2">

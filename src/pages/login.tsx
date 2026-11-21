@@ -1,3 +1,4 @@
+import { verifyAccess, TOKEN_KEY } from '@/lib/api';
 import { useState, type FormEvent } from 'react';
 import { Redirect, useLocation } from 'wouter';
 import {
@@ -16,8 +17,6 @@ import {
 import { Button } from '@/components/ui/button';
 import { useAuth } from '@/lib/auth';
 
-const DEMO_EMAIL = 'admin@sb100.io';
-const DEMO_PASSWORD = 'demo1234';
 const logoUrl = `${import.meta.env.BASE_URL}CCDSB100.jpg`;
 
 const highlights = [
@@ -44,9 +43,8 @@ const highlights = [
 export default function Login() {
   const { user, signIn } = useAuth();
   const [, navigate] = useLocation();
-  const [email, setEmail] = useState(DEMO_EMAIL);
-  const [password, setPassword] = useState(DEMO_PASSWORD);
-  const [remember, setRemember] = useState(true);
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
@@ -55,25 +53,29 @@ export default function Login() {
     return <Redirect to="/" />;
   }
 
-  function handleSubmit(event: FormEvent<HTMLFormElement>) {
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const trimmedEmail = email.trim();
 
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmedEmail)) {
-      setError('Informe um e-mail válido.');
-      return;
-    }
-    if (password.length < 4) {
-      setError('Sua senha precisa ter pelo menos 4 caracteres.');
+    if (!trimmedEmail || !password) {
+      setError('Informe o e-mail e a senha.');
       return;
     }
 
     setError('');
     setSubmitting(true);
-    window.setTimeout(() => {
-      signIn(trimmedEmail, remember);
+    try {
+      const authorization = 'Basic ' + btoa(trimmedEmail + ':' + password);
+      const account = await verifyAccess(authorization);
+      if (account.email.toLowerCase() !== trimmedEmail.toLowerCase()) throw new Error();
+      sessionStorage.setItem(TOKEN_KEY, authorization);
+      signIn(account.email, false);
       navigate('/', { replace: true });
-    }, 400);
+    } catch {
+      setError('Não foi possível autenticar. Confira o e-mail, a senha e a conexão.');
+    } finally {
+      setSubmitting(false);
+    }
   }
 
   return (
@@ -266,21 +268,6 @@ export default function Login() {
                 </div>
               </div>
 
-              <div className="flex items-center justify-between gap-3">
-                <label className="inline-flex cursor-pointer items-center gap-2 text-[12px] text-[#65776b]">
-                  <input
-                    type="checkbox"
-                    checked={remember}
-                    onChange={(event) => setRemember(event.target.checked)}
-                    className="h-3.5 w-3.5 cursor-pointer rounded border-[#c9d7ce] accent-[#1f684a]"
-                  />
-                  Manter conectado
-                </label>
-                <span className="font-mono text-[10px] uppercase tracking-[.1em] text-[#9aa69f]">
-                  RBAC ativo
-                </span>
-              </div>
-
               {error && (
                 <div
                   role="alert"
@@ -309,22 +296,8 @@ export default function Login() {
               </Button>
             </form>
 
-            <div className="mt-6 rounded-lg border border-[#e0e9e3] bg-[#f2f7f3] px-4 py-3">
-              <div className="flex items-center gap-1.5 text-[11px] font-semibold text-[#3d6f56]">
-                <Sparkles className="h-3.5 w-3.5" />
-                Acesso de demonstração
-              </div>
-              <p className="mt-1 text-[11px] leading-relaxed text-[#7a8880]">
-                As credenciais já estão preenchidas. Basta clicar em{' '}
-                <span className="font-semibold text-[#5b6f62]">
-                  Entrar no dashboard
-                </span>
-                .
-              </p>
-            </div>
-
             <p className="mt-8 text-center font-mono text-[9px] uppercase tracking-[.14em] text-[#a3aea7]">
-              © 2026 CCD-SB100 · Ambiente de demonstração
+              © 2026 CCD-SB100
             </p>
           </div>
         </div>

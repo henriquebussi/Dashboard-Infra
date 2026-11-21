@@ -103,10 +103,11 @@ async def export_dashboard_report(
         ) from exc
 
     gcp_service = getattr(request.app.state, "gcp_service", None)
-    if source == "demo" or gcp_service is None:
+    if source == "demo":
         payload = metrics_store.get_overview_payload(filters)
-        if source == "demo":
-            payload.data_source = "demo"
+        payload.data_source = "demo"
+    elif gcp_service is None:
+        raise HTTPException(503, "Integração GCP indisponível")
     else:
         payload = await gcp_service.get_overview_payload(filters)
 

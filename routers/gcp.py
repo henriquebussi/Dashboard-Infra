@@ -16,6 +16,7 @@ query parameters already established in the dashboard schema.
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timezone
 import os
 from typing import Any, Dict, List, Optional
 
@@ -336,6 +337,8 @@ async def flush_cache(
 ) -> Dict[str, Any]:
     """Flush the Redis metric cache namespace (restricted to INFRA_ADMIN)."""
     cache = _get_cache(request)
+    if not pattern.startswith("metrics:") and not pattern.startswith("gcp:"):
+        raise HTTPException(422, "Namespace inválido")
     deleted = await cache.flush_namespace(pattern=pattern)
     logger.warning(
         "[GCPRouter] Cache flushed by %s — %d keys deleted (pattern=%s)",
@@ -396,3 +399,46 @@ async def prewarm_cache(
         "cache_keys": warmed,
         "triggered_by": admin.user_id,
     }
+
+
+async def _monitoring_read(operation):
+    from google.api_core.exceptions import Forbidden, InvalidArgument, ResourceExhausted
+    try:
+        return await operation
+    except Forbidden as exc:
+        raise HTTPException(403, "Sem permissão para esta leitura no Cloud Monitoring.") from exc
+    except InvalidArgument as exc:
+        raise HTTPException(422, "O Cloud Monitoring rejeitou o filtro ou a página solicitada.") from exc
+    except ResourceExhausted as exc:
+        raise HTTPException(429, "Cota de leitura do Cloud Monitoring esgotada.") from exc
+    except Exception as exc:
+        logger.exception("Cloud Monitoring catalog read failed")
+        raise HTTPException(503, "Não foi possível consultar o Cloud Monitoring.") from exc
+
+
+@router.get("/gcp/catalog", tags=["GCP Live Metrics"])
+async def metric_catalog(
+    request: Request, env: Environment = Environment.PROD, active_only: bool = True,
+    page_token: str = Query(default="", max_length=8192),
+    user: UserRBACContext = Depends(get_current_user),
+):
+    return await _monitoring_read(_get_gcp_service(request).metric_catalog(env, active_only, page_token))
+
+
+@router.get("/gcp/catalog/series", tags=["GCP Live Metrics"])
+async def catalog_series(
+    request: Request,
+    metric_type: str = Query(min_length=1, max_length=1024),
+    env: Environment = Environment.PROD,
+    period: TimePeriod = TimePeriod.TWENTY_FOUR_HOURS,
+    end: Optional[datetime] = None,
+    page_token: str = Query(default="", max_length=8192),
+    user: UserRBACContext = Depends(get_current_user),
+):
+    if page_token and end is None:
+        raise HTTPException(422, "A próxima página requer o instante final da consulta original.")
+    if end is not None and end.tzinfo is None:
+        raise HTTPException(422, "Informe o fuso horário do instante final.")
+    return await _monitoring_read(_get_gcp_service(request).catalog_series(
+        env, metric_type, period, end or datetime.now(timezone.utc), page_token,
+    ))

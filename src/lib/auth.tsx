@@ -1,3 +1,4 @@
+import { TOKEN_KEY } from './api';
 import {
   createContext,
   useCallback,
@@ -36,7 +37,7 @@ function readStoredUser(): AuthUser | null {
     const raw =
       window.localStorage.getItem(STORAGE_KEY) ??
       window.sessionStorage.getItem(STORAGE_KEY);
-    if (!raw) return null;
+    if (!window.sessionStorage.getItem(TOKEN_KEY) || !raw) return null;
 
     const parsed = JSON.parse(raw) as Partial<AuthUser>;
     if (!parsed.email || typeof parsed.email !== 'string') return null;
@@ -77,6 +78,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const signOut = useCallback(() => {
+    sessionStorage.removeItem(TOKEN_KEY);
     try {
       window.localStorage.removeItem(STORAGE_KEY);
       window.sessionStorage.removeItem(STORAGE_KEY);

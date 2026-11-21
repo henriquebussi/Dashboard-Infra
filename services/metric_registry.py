@@ -39,6 +39,7 @@ class MetricDefinition:
     default_available: bool = True
     unavailable_reason: Optional[str] = None
     description: str = ""
+    window_seconds: Optional[int] = None
 
 
 # ---------------------------------------------------------------------------
@@ -105,14 +106,13 @@ METRIC_DEFINITIONS: Dict[str, MetricDefinition] = {
         id="database.avg_response_time_ms",
         category="database",
         field_name="avg_response_time_ms",
-        gcp_metric_types=[
-            "cloudsql.googleapis.com/database/mysql/queries",
-        ],
+        gcp_metric_types=[],
         aligner="ALIGN_PERCENTILE_95",
         reducer="REDUCE_MEAN",
         unit="ms",
         group_by_fields=["resource.labels.database_id"],
-        description="Mean / P95 query execution duration across instances in milliseconds",
+        unavailable_reason="Cloud SQL query count does not measure query latency; configure a latency metric or log-based measurement",
+        description="Query execution duration in milliseconds, when a latency source is configured",
     ),
     "database.cpu_io_percent": MetricDefinition(
         id="database.cpu_io_percent",
@@ -210,22 +210,20 @@ METRIC_DEFINITIONS: Dict[str, MetricDefinition] = {
         unit="USD",
         requires_billing=True,
         default_available=False,
-        unavailable_reason="Requires GCP Billing permissions",
+        unavailable_reason="Fonte de billing não configurada; integração de custos não implementada.",
         description="Projected cloud infrastructure charges for the active period in USD",
     ),
     "cloud.uptime_percent": MetricDefinition(
         id="cloud.uptime_percent",
         category="cloud",
         field_name="uptime_percent",
-        gcp_metric_types=[
-            "compute.googleapis.com/instance/uptime",
-        ],
+        gcp_metric_types=[],
         aligner="ALIGN_RATE",
         reducer="REDUCE_MEAN",
         unit="%",
         group_by_fields=["resource.labels.instance_id"],
-        value_transform=lambda v: min(100.0, max(0.0, round(v * 100.0, 2) if v <= 1.0 else 99.9)),
-        description="Observed VM compute fleet availability and uptime percentage",
+        unavailable_reason="VM uptime seconds cannot be converted directly to availability percentage",
+        description="Observed VM availability percentage requires an uptime check or state history",
     ),
     "cloud.network_in": MetricDefinition(
         id="cloud.network_in",
@@ -301,17 +299,14 @@ METRIC_DEFINITIONS: Dict[str, MetricDefinition] = {
         id="storage.bucket_volume_usage_percent",
         category="storage",
         field_name="bucket_volume_usage_percent",
-        gcp_metric_types=[
-            "storage.googleapis.com/storage/v2/total_bytes",
-            "storage.googleapis.com/storage/total_bytes",
-        ],
+        gcp_metric_types=[],
         aligner="ALIGN_MEAN",
         reducer="REDUCE_MEAN",
         unit="%",
         group_by_fields=["resource.labels.bucket_name"],
         is_daily_snapshot=True,
-        value_transform=lambda v: min(100.0, max(0.0, round((v / (1024.0**4)) * 10.0, 2))),  # scaled %
-        description="Relative capacity pressure across monitored GCS buckets",
+        unavailable_reason="Cloud Storage buckets have no fixed capacity; bytes cannot be expressed as a usage percentage",
+        description="Bucket capacity percentage requires a configured capacity target",
     ),
     "storage.iops": MetricDefinition(
         id="storage.iops",
@@ -346,15 +341,13 @@ METRIC_DEFINITIONS: Dict[str, MetricDefinition] = {
         id="storage.latency_ms",
         category="storage",
         field_name="latency_ms",
-        gcp_metric_types=[
-            "storage.googleapis.com/storage/v2/request_count",
-            "storage.googleapis.com/storage/request_count",
-        ],
+        gcp_metric_types=[],
         aligner="ALIGN_PERCENTILE_95",
         reducer="REDUCE_MEAN",
         unit="ms",
         group_by_fields=["resource.labels.bucket_name"],
-        description="Mean request latency for object storage operations in milliseconds",
+        unavailable_reason="Cloud Storage request count does not measure latency",
+        description="Object request latency requires a latency metric or request logs",
     ),
     "storage.object_count": MetricDefinition(
         id="storage.object_count",
@@ -449,11 +442,11 @@ METRIC_DEFINITIONS: Dict[str, MetricDefinition] = {
         field_name="daily_token_count",
         gcp_metric_types=[
             "aiplatform.googleapis.com/publisher/online_serving/token_count",
-            "aiplatform.googleapis.com/prediction/online/prediction_count",
         ],
-        aligner="ALIGN_RATE",
+        aligner="ALIGN_SUM",
         reducer="REDUCE_SUM",
         unit="tokens",
+        window_seconds=86400,
         description="Total tokens processed across Vertex AI publisher model endpoints in 24h",
     ),
     "tokens.weekly_token_count": MetricDefinition(
@@ -462,11 +455,11 @@ METRIC_DEFINITIONS: Dict[str, MetricDefinition] = {
         field_name="weekly_token_count",
         gcp_metric_types=[
             "aiplatform.googleapis.com/publisher/online_serving/token_count",
-            "aiplatform.googleapis.com/prediction/online/prediction_count",
         ],
-        aligner="ALIGN_RATE",
+        aligner="ALIGN_SUM",
         reducer="REDUCE_SUM",
         unit="tokens",
+        window_seconds=604800,
         description="Total tokens processed across Vertex AI endpoints over rolling 7 days",
     ),
     "tokens.cost_per_model": MetricDefinition(
@@ -477,21 +470,19 @@ METRIC_DEFINITIONS: Dict[str, MetricDefinition] = {
         unit="USD",
         requires_billing=True,
         default_available=False,
-        unavailable_reason="Requires GCP Billing permissions",
+        unavailable_reason="Fonte de billing não configurada; integração de custos não implementada.",
         description="Estimated model inference spend grouped by model family in USD",
     ),
     "tokens.error_rate_percent": MetricDefinition(
         id="tokens.error_rate_percent",
         category="tokens",
         field_name="error_rate_percent",
-        gcp_metric_types=[
-            "aiplatform.googleapis.com/publisher/online_serving/error_count",
-            "aiplatform.googleapis.com/prediction/online/error_count",
-        ],
+        gcp_metric_types=[],
         aligner="ALIGN_RATE",
         reducer="REDUCE_SUM",
         unit="%",
-        description="Inference API error rate percentage (0.0 to 100.0%)",
+        unavailable_reason="Error counts alone cannot determine an error rate; a matching request denominator is required",
+        description="Inference API error rate percentage when matching request totals are available",
     ),
     "tokens.rate_limit_breaches": MetricDefinition(
         id="tokens.rate_limit_breaches",
@@ -511,7 +502,6 @@ METRIC_DEFINITIONS: Dict[str, MetricDefinition] = {
         field_name="availability_percent",
         gcp_metric_types=[
             "cloudsql.googleapis.com/database/up",
-            "compute.googleapis.com/instance/uptime",
         ],
         aligner="ALIGN_MEAN",
         reducer="REDUCE_MEAN",
@@ -527,7 +517,7 @@ METRIC_DEFINITIONS: Dict[str, MetricDefinition] = {
         aligner="ALIGN_DELTA",
         reducer="REDUCE_SUM",
         unit="count",
-        description="Total HTTP 4xx and 5xx client and server error responses recorded",
+        description="HTTP 4xx and 5xx responses require an HTTP status metric; severity logs are a separate signal",
     ),
     "sla.peak_usage_percent": MetricDefinition(
         id="sla.peak_usage_percent",
@@ -547,14 +537,12 @@ METRIC_DEFINITIONS: Dict[str, MetricDefinition] = {
         id="sla.growth_trend_percent",
         category="sla",
         field_name="growth_trend_percent",
-        gcp_metric_types=[
-            "cloudsql.googleapis.com/database/mysql/queries",
-            "compute.googleapis.com/instance/network/received_bytes_count",
-        ],
+        gcp_metric_types=[],
         aligner="ALIGN_RATE",
         reducer="REDUCE_SUM",
         unit="%",
-        description="Relative workload volume growth or contraction percentage versus comparison period",
+        unavailable_reason="Growth percentage needs a defined workload signal and comparison period",
+        description="Relative workload growth over a comparison period",
     ),
 }
 

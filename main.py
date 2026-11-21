@@ -37,7 +37,6 @@ from fastapi.responses import JSONResponse
 from routers.exports import router as exports_router
 from routers.gcp import router as gcp_router
 from routers.metrics import router as metrics_router
-from security import AuditLoggingMiddleware
 from services.cache import RedisCache
 from services.gcp_service import CachedGCPMetricsService
 
@@ -110,14 +109,15 @@ async def lifespan(app: FastAPI):
         prewarm_periods = os.getenv("GCP_PREWARM_PERIODS", "1h,24h").split(",")
         prewarm_timeout = float(os.getenv("GCP_PREWARM_TIMEOUT_SECONDS", "10"))
         try:
-            await asyncio.wait_for(
-                gcp_service.prewarm_standard_keys(
-                    environments=prewarm_envs,
-                    categories=prewarm_cats,
-                    periods=prewarm_periods,
-                ),
-                timeout=prewarm_timeout,
-            )
+            if redis_enabled:
+                await asyncio.wait_for(
+                    gcp_service.prewarm_standard_keys(
+                        environments=prewarm_envs,
+                        categories=prewarm_cats,
+                        periods=prewarm_periods,
+                    ),
+                    timeout=prewarm_timeout,
+                )
         except asyncio.TimeoutError:
             logger.warning(
                 "[Lifespan] Pre-warm timed out after %.0fs — continuing without it.",
@@ -136,7 +136,7 @@ async def lifespan(app: FastAPI):
     app.state.redis_cache = redis_cache
     app.state.gcp_service = gcp_service
 
-    logger.info("[Lifespan] Startup complete. Redis=%s | GCP project=%s", redis_url, project_id or "N/A")
+    logger.info("[Lifespan] Startup complete. Redis enabled=%s | GCP project=%s", redis_enabled, project_id or "N/A")
 
     yield  # ← app is running
 
@@ -202,7 +202,7 @@ app.add_middleware(
 )
 
 # 2. RBAC Audit Logging Middleware
-app.add_middleware(AuditLoggingMiddleware)
+
 
 # ============================================================================
 # Routers Registration (/api/v1)

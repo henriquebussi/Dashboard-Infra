@@ -52,6 +52,7 @@ export function MetricCard({ metric, period, multiplier, onSelect, dataSource }:
           className="w-full text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
         >
           <div className="flex min-h-[142px] flex-col justify-between p-4 pb-2">
+            <p className="mb-1 text-xs text-muted-foreground">Fonte · {dataSource === 'mock' || resolvedSource === 'demo' ? 'Demonstração' : 'GCP'}</p>
             <div className="flex items-start justify-between gap-2">
               <span className="text-[11px] font-semibold uppercase tracking-[.085em] text-[#748078]">
                 {metric.label}
@@ -138,14 +139,14 @@ export function MetricCard({ metric, period, multiplier, onSelect, dataSource }:
               <ArrowRight className="mb-1 h-4 w-4 text-[#a2b1a8] opacity-0 transition-all group-hover:translate-x-0.5 group-hover:opacity-100" />
             </div>
           </div>
-          <ApexChart
+          {isAvailable && (!metric.isLive || metric.series.length > 0) ? <ApexChart
             labels={chartLabels}
             series={[{ name: metric.label, values: chartValues }]}
             compact
-          />
+          /> : <p className="px-4 pb-3 text-[10px] text-[#96a19b]">{isAvailable ? 'Sem histórico disponível.' : 'Histórico indisponível.'}</p>}
         </button>
         <div className="border-t border-[#f0f3f1] px-4 py-2 text-[10px] text-[#96a19b]">
-          {metric.reason && !isAvailable ? metric.reason : metric.description}
+          {metric.reason && (!isAvailable || resolvedSource === 'estimated') ? metric.reason : metric.description}
         </div>
       </CardContent>
     </Card>
