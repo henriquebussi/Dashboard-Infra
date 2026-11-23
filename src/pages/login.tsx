@@ -1,4 +1,4 @@
-import { verifyAccess, TOKEN_KEY } from '@/lib/api';
+import { ApiError, verifyAccess, TOKEN_KEY } from '@/lib/api';
 import { useState, type FormEvent } from 'react';
 import { Redirect, useLocation } from 'wouter';
 import {
@@ -46,7 +46,7 @@ export default function Login() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
-  const [submitting, setSubmitting] = useState(false);
+  const [submitting, setSubmitting] = useState<'manual' | 'viewer' | null>(null);
   const [error, setError] = useState('');
 
   if (user) {
@@ -62,19 +62,28 @@ export default function Login() {
       return;
     }
 
+    await authenticate(trimmedEmail, password, 'manual');
+  }
+
+  async function authenticate(email: string, password: string, mode: 'manual' | 'viewer') {
+    if (submitting) return;
     setError('');
-    setSubmitting(true);
+    setSubmitting(mode);
     try {
-      const authorization = 'Basic ' + btoa(trimmedEmail + ':' + password);
+      const authorization = 'Basic ' + btoa(email + ':' + password);
       const account = await verifyAccess(authorization);
-      if (account.email.toLowerCase() !== trimmedEmail.toLowerCase()) throw new Error();
+      if (account.email.toLowerCase() !== email.toLowerCase()) throw new Error();
       sessionStorage.setItem(TOKEN_KEY, authorization);
       signIn(account.email, false);
       navigate('/', { replace: true });
-    } catch {
-      setError('Não foi possível autenticar. Confira o e-mail, a senha e a conexão.');
+    } catch (cause) {
+      if (cause instanceof ApiError && (cause.status === 401 || cause.status === 403)) {
+        setError(mode === 'viewer' ? 'O acesso rápido do Viewer está indisponível.' : 'E-mail ou senha inválidos.');
+      } else {
+        setError('Não foi possível conectar à API do Dashboard. Aguarde a conexão com o backend e tente novamente.');
+      }
     } finally {
-      setSubmitting(false);
+      setSubmitting(null);
     }
   }
 
@@ -279,10 +288,10 @@ export default function Login() {
 
               <Button
                 type="submit"
-                disabled={submitting}
+                disabled={submitting !== null}
                 className="h-11 w-full rounded-lg bg-[#1f684a] text-[13px] font-semibold text-white shadow-[0_6px_16px_rgba(31,104,74,.18)] hover:bg-[#1a5b40]"
               >
-                {submitting ? (
+                {submitting === 'manual' ? (
                   <>
                     <Loader2 className="h-4 w-4 animate-spin" />
                     Entrando…
@@ -293,6 +302,15 @@ export default function Login() {
                     <ArrowRight className="h-4 w-4" />
                   </>
                 )}
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                disabled={submitting !== null}
+                className="h-11 w-full"
+                onClick={() => void authenticate('viewer@dashboard', '123', 'viewer')}
+              >
+                {submitting === 'viewer' ? 'Entrando como Viewer…' : 'Entrar como Viewer'}
               </Button>
             </form>
 
