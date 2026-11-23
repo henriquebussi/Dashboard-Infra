@@ -59,9 +59,9 @@ function mapped(reading, sectionId = 'cloud', metricId = 'cost') {
   return overview.applyOverviewToSections(mock.sections, payload)
     .find(section => section.id === sectionId).metrics.find(metric => metric.id === metricId);
 }
-function render(metric) {
+function render(metric, multiplier = 1) {
   chartCalls.length = 0;
-  return expand(ui.MetricCard({ metric, period: '24h', multiplier: 1, onSelect() {} }));
+  return expand(ui.MetricCard({ metric, period: '24h', multiplier, onSelect() {} }));
 }
 
 for (const [section, metricId] of [['cloud', 'cost'], ['tokens', 'model-cost']]) {
@@ -142,16 +142,8 @@ test('root demo provenance overrides default gcp readings and never enters Real 
   assert.match(rendered, /Demo/);
   assert.doesNotMatch(rendered, /GCP Live/);
 
-  // Compile the actual pure sanitiser from the page; avoid importing browser hooks.
-  const pageSource = fs.readFileSync('src/pages/dashboard.tsx', 'utf8');
-  const snippet = pageSource.slice(pageSource.indexOf("const UNAVAILABLE ="),
-    pageSource.indexOf('function getRealScopedSection')) + '\nexport { sanitizeRealSections };';
-  const code = ts.transpileModule(snippet, { compilerOptions: {
-    module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022,
-  }}).outputText;
-  const exports = {};
-  vm.runInNewContext(code, { exports });
-  const real = exports.sanitizeRealSections(mappedSections)[0].metrics.find(m => m.id === 'cost');
+  const { sanitizeRealSections } = load('src/features/dashboard/dashboardScope.ts', { './mock-data': mock });
+  const real = sanitizeRealSections(mappedSections)[0].metrics.find(m => m.id === 'cost');
   assert.equal(real.available, false);
   assert.equal(real.source, 'unavailable');
   assert.equal(real.value, 'Indisponível');
@@ -159,4 +151,11 @@ test('root demo provenance overrides default gcp readings and never enters Real 
   const realRendered = text(render(real));
   assert.doesNotMatch(realRendered, /\$18|GCP Live|Demo/);
   assert.equal(chartCalls.length, 0);
+});
+
+test('demonstration sparkline applies the environment multiplier once', () => {
+  const metric = { ...mock.sections[0].metrics[0], series: Array(24).fill(10) };
+  render(metric, 0.5);
+  assert.equal(chartCalls.length, 1);
+  assert.ok(chartCalls[0].series[0].values.every(value => value === 5));
 });

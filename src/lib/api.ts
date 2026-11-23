@@ -36,7 +36,7 @@ export class ApiError extends Error {
 // Core fetch wrapper
 // ---------------------------------------------------------------------------
 
-async function apiFetch<T>(path: string, init: RequestInit = {}): Promise<T> {
+async function apiResponse(path: string, init: RequestInit = {}) {
   const url = `${BASE_URL}/api/v1${path}`;
   const access = sessionStorage.getItem(TOKEN_KEY) ?? '';
   const res = await fetch(url, {
@@ -59,7 +59,23 @@ async function apiFetch<T>(path: string, init: RequestInit = {}): Promise<T> {
     throw new ApiError(res.status, detail);
   }
 
-  return res.json() as Promise<T>;
+  return res;
+}
+
+async function apiFetch<T>(path: string, init: RequestInit = {}): Promise<T> {
+  return (await apiResponse(path, init)).json() as Promise<T>;
+}
+
+export async function downloadSnapshot(format: string, snapshot: {
+  title: string; scope: string; statistics: {
+    name: string; value: string; unit: string; source: string;
+    points: {label: string; value: number}[];
+  }[];
+}) {
+  const response = await apiResponse(`/export/snapshot?format=${format}`, {
+    method: 'POST', body: JSON.stringify(snapshot),
+  });
+  return response.blob();
 }
 
 // ---------------------------------------------------------------------------
@@ -444,4 +460,41 @@ export function getCatalogSeries(env: Environment, period: Period, type: string,
 
 export function fetchQdrantMetrics(env: Environment, signal: AbortSignal) {
   return apiFetch<{provider: string; collections: number}>(`/qdrant/metrics?env=${env}`, {signal});
+}
+
+export function getSession() {
+  return apiFetch<{role: 'INFRA_ADMIN' | 'VIEW_ONLY'}>('/session');
+}
+
+export type MetricThreshold = {
+  metric_name: string;
+  operator: string;
+  warning_threshold: number;
+  critical_threshold: number;
+};
+
+export function getMetricThresholds() {
+  return apiFetch<MetricThreshold[]>('/thresholds');
+}
+
+export function saveMetricThreshold(config: MetricThreshold) {
+  return apiFetch<MetricThreshold>('/thresholds', {method: 'POST', body: JSON.stringify(config)});
+}
+
+export type ConfigurationAuditEntry = {
+  log_id: string;
+  user_id: string;
+  timestamp: string;
+  action_type: string;
+  previous_value: MetricThreshold | null;
+  new_value: MetricThreshold;
+};
+
+export function getThresholdHistory(metricName: string, offset: number, signal: AbortSignal) {
+  const params = new URLSearchParams({
+    targeted_metric: metricName,
+    exact_metric: 'true',
+    offset: String(offset),
+  });
+  return apiFetch<ConfigurationAuditEntry[]>(`/audit-logs?${params}`, {signal});
 }

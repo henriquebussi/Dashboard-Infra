@@ -7,6 +7,7 @@ import logging
 from typing import Callable, Optional, Union
 
 from fastapi import Depends, HTTPException, Request, Security, status
+from starlette.concurrency import run_in_threadpool
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer, HTTPBasic, HTTPBasicCredentials
 
 from schemas import (
@@ -16,11 +17,12 @@ from schemas import (
     UserRole,
 )
 
+from services.accounts import authenticate_account
+
 logger = logging.getLogger("gcp_observatory.security")
 
 # Security Schemes for OpenAPI documentation
 basic_scheme = HTTPBasic(auto_error=False)
-TEMPORARY_ACCOUNTS = {"viewer@dashboard": UserRole.VIEW_ONLY, "admin@dashboard": UserRole.INFRA_ADMIN}
 bearer_scheme = HTTPBearer(auto_error=False)
 
 
@@ -44,13 +46,13 @@ async def get_current_user(
     bearer: Optional[HTTPAuthorizationCredentials] = Security(bearer_scheme),
     basic: Optional[HTTPBasicCredentials] = Security(basic_scheme),
 ) -> UserRBACContext:
-    """Authenticate server-configured, revocable access tokens."""
+    """Authenticate SQLite accounts or configured access tokens."""
     if isinstance(getattr(request.state, "user", None), UserRBACContext):
         return request.state.user
     if basic:
         email = basic.username.strip().lower()
-        role = TEMPORARY_ACCOUNTS.get(email)
-        if role is None or not hmac.compare_digest(basic.password.encode(), b"123"):
+        role = await run_in_threadpool(authenticate_account, email, basic.password)
+        if role is None:
             raise HTTPException(401, "E-mail ou senha inválidos")
         user_id = email
     else:

@@ -1457,3 +1457,22 @@ if __name__ == "__main__":
     print(f"✓ RBAC View Only permission check: {viewer_rbac.has_permission(Permission.INFRA_REMEDIATE)}")
     print(f"✓ JSON serialization length: {len(root_payload.model_dump_json())} bytes.")
     print("==================================================================")
+
+
+class ExportReading(BaseModel):
+    label: str = Field(max_length=256)
+    value: float = Field(allow_inf_nan=False)
+
+
+class ExportStatistic(BaseModel):
+    name: str = Field(max_length=256)
+    value: str = Field(max_length=256)
+    unit: str = Field(max_length=128)
+    source: str = Field(max_length=64)
+    points: list[ExportReading] = Field(max_length=5000)
+
+
+class DashboardSnapshot(BaseModel):
+    title: str = Field(max_length=512)
+    scope: str = Field(max_length=1024)
+    statistics: list[ExportStatistic] = Field(min_length=1, max_length=64)

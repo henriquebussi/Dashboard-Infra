@@ -44,6 +44,7 @@ test('inventory exposes absent collectors and never claims a real read', () => {
 });
 test('source inventory is additive and limited to Real mode', () => {
   const page = fs.readFileSync('src/pages/dashboard.tsx', 'utf8');
-  assert.ok(page.includes('{realMode && <MetricSourceOverview />}'));
-  assert.ok(page.includes('{realMode && <MetricExplorer env={backendEnv} period={period} />}'));
+  const diagnostics = page.match(/\{realMode && \(\s*<section aria-labelledby="diagnostics-heading"[\s\S]*?<\/section>/)?.[0] ?? "";
+  assert.ok(diagnostics.includes("<MetricSourceOverview />"));
+  assert.ok(diagnostics.includes("<MetricExplorer env={backendEnv} period={period} />"));
 });

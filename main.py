@@ -37,6 +37,7 @@ from fastapi.responses import JSONResponse
 from routers.exports import router as exports_router
 from routers.gcp import router as gcp_router
 from routers.metrics import router as metrics_router
+from services.accounts import initialize_accounts
 from services.cache import RedisCache
 from services.gcp_service import CachedGCPMetricsService
 
@@ -50,6 +51,7 @@ logger = logging.getLogger("gcp_observatory.main")
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Manage the lifecycle of the Redis cache and GCP integration service."""
+    initialize_accounts()
     redis_url = os.getenv("REDIS_URL", "redis://localhost:6379/0")
     redis_enabled = os.getenv("REDIS_ENABLED", "true").strip().lower() in {
         "1",

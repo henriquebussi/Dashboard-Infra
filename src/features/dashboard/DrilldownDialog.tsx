@@ -1,11 +1,9 @@
 import { useState } from 'react';
 import {
-  AlertTriangle,
   ArrowUpRight,
   BrainCircuit,
   Check,
   CircleAlert,
-  Clock,
   Cloud,
   Database,
   FileText,
@@ -35,6 +33,8 @@ type Props = {
   environment?: Environment;
   period?: Period;
   realMode?: boolean;
+  thresholdAction?: React.ReactNode;
+  exportAction?: React.ReactNode;
   onClose: () => void;
 };
 
@@ -85,6 +85,8 @@ export function DrilldownDialog({
   environment = 'Produção',
   period = '24h',
   realMode = true,
+  thresholdAction,
+  exportAction,
   onClose,
 }: Props) {
   const [activeTab, setActiveTab] = useState<string>('resources');
@@ -137,6 +139,10 @@ export function DrilldownDialog({
               {metric.description}
             </DialogDescription>
           </DialogHeader>
+          <div className="mt-3 flex flex-wrap items-start gap-2">
+            {exportAction}
+            {thresholdAction}
+          </div>
 
           <div className="mt-5 flex items-end justify-between">
             <div>

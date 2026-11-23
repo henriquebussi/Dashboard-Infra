@@ -256,7 +256,7 @@ async def get_active_alerts(
     description=(
         "Registers or updates custom warning and critical metric evaluation thresholds. "
         "Strictly restricted to users with the 'INFRA_ADMIN' role. Changes are automatically "
-        "intercepted and logged by the RBAC Audit Middleware."
+        "persisted together with their audit records."
     ),
     response_description="The updated MetricThresholdConfig definition.",
 )
@@ -314,6 +314,7 @@ async def get_audit_logs(
         default=None,
         description="Filter by targeted metric identifier (e.g. 'database.cpu_io_percent')",
     ),
+    exact_metric: bool = Query(default=False, description="Match the full metric identifier"),
     start_time: Optional[datetime] = Query(
         default=None,
         description="Filter records starting from this UTC timestamp",
@@ -343,7 +344,8 @@ async def get_audit_logs(
         end_time = end_time.replace(tzinfo=timezone.utc)
     return [entry for entry in governance.audit_entries()
             if (not user_id or user_id.lower() in entry.user_id.lower())
-            and (not targeted_metric or targeted_metric.lower() in entry.targeted_metric.lower())
+            and (not targeted_metric or (entry.targeted_metric == targeted_metric if exact_metric
+                                         else targeted_metric.lower() in entry.targeted_metric.lower()))
             and (not action_type or str(getattr(entry.action_type, "value", entry.action_type)).lower() == action_type.lower())
             and (not start_time or entry.timestamp >= start_time)
             and (not end_time or entry.timestamp <= end_time)][offset:offset + limit]

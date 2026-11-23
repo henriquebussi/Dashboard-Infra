@@ -1,7 +1,8 @@
-import { Clock, Search, SlidersHorizontal } from 'lucide-react';
+import { Search, SlidersHorizontal, X } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import type { Bucket } from '@/lib/api';
+import { ALL_SERVICES } from './dashboardScope';
 import type { Environment, Period } from './mock-data';
 
 type Props = {
@@ -37,10 +38,12 @@ export function FiltersBar({
       </div>
       <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
         {/* Period Selector including 1h */}
-        <div className="inline-flex h-9 items-center rounded-md border border-[#dce5df] bg-white p-1" data-testid="filter-period">
+        <div className="inline-flex h-9 items-center rounded-md border border-[#dce5df] bg-white p-1" role="group" aria-label="Período" data-testid="filter-period">
           {(['1h', '24h', '7d', '30d'] as Period[]).map((item) => (
             <button
               key={item}
+              type="button"
+              aria-pressed={period === item}
               onClick={() => setPeriod(item)}
               data-testid={`button-period-${item}`}
               className={`h-7 rounded px-3 text-xs font-semibold transition-colors ${
@@ -55,8 +58,8 @@ export function FiltersBar({
         {/* Dynamic Bucket Selector */}
         {setBucket && (
           <Select value={bucket} onValueChange={(val: Bucket) => setBucket(val)}>
-            <SelectTrigger data-testid="select-bucket" className="h-9 w-full border-[#dce5df] bg-white text-xs sm:w-[115px]">
-              <span className="text-[#819088] mr-1">Bucket:</span>
+            <SelectTrigger aria-label="Intervalo de agregação" data-testid="select-bucket" className="h-9 w-full border-[#dce5df] bg-white text-xs sm:w-[130px]">
+              <span className="text-[#819088] mr-1">Intervalo:</span>
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -72,7 +75,7 @@ export function FiltersBar({
 
         {/* Environment Selector */}
         <Select value={environment} onValueChange={(value: Environment) => setEnvironment(value)}>
-          <SelectTrigger data-testid="select-environment" className="h-9 w-full border-[#dce5df] bg-white text-xs sm:w-[145px]">
+          <SelectTrigger aria-label="Ambiente" data-testid="select-environment" className="h-9 w-full border-[#dce5df] bg-white text-xs sm:w-[145px]">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -84,11 +87,11 @@ export function FiltersBar({
 
         {/* Service Selector */}
         <Select value={service} onValueChange={setService}>
-          <SelectTrigger data-testid="select-service" className="h-9 w-full border-[#dce5df] bg-white text-xs sm:w-[152px]">
+          <SelectTrigger aria-label="Serviço" data-testid="select-service" className="h-9 w-full border-[#dce5df] bg-white text-xs sm:w-[152px]">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="Todos os serviços">Todos os serviços</SelectItem>
+            <SelectItem value={ALL_SERVICES}>{ALL_SERVICES}</SelectItem>
             <SelectItem value="Cloud SQL">Cloud SQL</SelectItem>
             <SelectItem value="BigQuery">BigQuery</SelectItem>
             <SelectItem value="Cloud Storage">Cloud Storage</SelectItem>
@@ -105,10 +108,19 @@ export function FiltersBar({
           <Input
             value={search}
             onChange={(event) => setSearch(event.target.value)}
-            placeholder="Buscar um recurso…"
+            aria-label="Buscar métricas ou recursos"
+            placeholder="Buscar no painel…"
             data-testid="input-resource-search"
-            className="h-9 border-[#dce5df] bg-white pl-9 text-xs placeholder:text-[#9aa69f]"
+            className="h-9 border-[#dce5df] bg-white pl-9 pr-9 text-xs placeholder:text-[#9aa69f]"
           />
+          {search && (
+            <button type="button" aria-label="Limpar busca" onClick={event => {
+              setSearch('');
+              event.currentTarget.parentElement?.querySelector('input')?.focus();
+            }} className="absolute right-0 top-0 grid h-9 w-9 place-items-center rounded-md text-[#52665a] focus-visible:outline-2 focus-visible:outline-primary">
+              <X className="h-4 w-4" />
+            </button>
+          )}
         </div>
       </div>
     </div>

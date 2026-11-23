@@ -11,7 +11,9 @@ from datetime import datetime
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
+from schemas import DashboardSnapshot
+from services.snapshot_export import render_snapshot
 
 from schemas import DashboardFilterParams, Environment, TimePeriod, UserRBACContext
 from security import get_current_user
@@ -129,3 +131,9 @@ async def export_dashboard_report(
             "Access-Control-Expose-Headers": "Content-Disposition",
         },
     )
+
+
+@router.post("/export/snapshot")
+def export_snapshot(snapshot: DashboardSnapshot, format: ExportFormat, user: UserRBACContext = Depends(get_current_user)):
+    content, media_type = render_snapshot(snapshot, format.value)
+    return Response(content, media_type=media_type)

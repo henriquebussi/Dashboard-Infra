@@ -1,7 +1,18 @@
+import { DataSourceBadge } from '@/features/dashboard/DataSourceBadge';
+import { ReadingsTable } from '@/features/dashboard/ReadingsTable';
+import {
+  ALL_SERVICES,
+  UNAVAILABLE,
+  getRealScopedSection,
+  getScopedResources,
+  getScopedSection,
+  sanitizeRealSections,
+  serviceSection,
+} from '@/features/dashboard/dashboardScope';
 import { QdrantCard } from '@/features/dashboard/QdrantCard';
 import { ProjectTelemetry } from '@/features/dashboard/ProjectTelemetry';
 import { MetricSourceOverview } from '@/features/dashboard/MetricSourceOverview';
-import { MetricExplorer } from "@/features/dashboard/MetricExplorer";
+import { MetricExplorer } from '@/features/dashboard/MetricExplorer';
 import { useMemo, useState } from 'react';
 import { useLocation } from 'wouter';
 import {
@@ -32,10 +43,11 @@ import { ApexChart } from '@/features/dashboard/ApexChart';
 import { DrilldownDialog } from '@/features/dashboard/DrilldownDialog';
 import { FiltersBar } from '@/features/dashboard/FiltersBar';
 import { MetricCard } from '@/features/dashboard/MetricCard';
+import { MetricThresholdEditor } from '@/features/dashboard/MetricThresholdEditor';
+import { SectionExport } from '@/features/dashboard/SectionExport';
 import { SourceDot, type DataSource } from '@/features/dashboard/SourceDot';
 import {
   generateHourlySeries,
-  resources,
   sections,
   type Environment,
   type Metric,
@@ -46,9 +58,9 @@ import {
   useGcpHealth,
   useOverview,
   envToBackend,
-  type UseOverviewResult,
 } from '@/lib/useMetrics';
 import {
+  METRIC_KEYS,
   applyOverviewToSections,
   buildOverviewChart,
   getOverviewAvailability,
@@ -57,7 +69,6 @@ import {
 import type { Bucket } from '@/lib/api';
 
 const logoUrl = `${import.meta.env.BASE_URL}CCDSB100.jpg`;
-const ALL_SERVICES = 'Todos os serviços';
 
 // ---------------------------------------------------------------------------
 // Data mode — real backend/GCP calls vs. local demo dataset
@@ -76,13 +87,6 @@ function readInitialDataMode(): DataMode {
   return import.meta.env.VITE_USE_MOCK_DATA === 'true' ? 'mock' : 'real';
 }
 
-// ---------------------------------------------------------------------------
-// Section → backend category mapping
-// ---------------------------------------------------------------------------
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
 const sectionIcons: Record<string, typeof Database> = {
   database: Database,
   cloud: Cloud,
@@ -92,159 +96,11 @@ const sectionIcons: Record<string, typeof Database> = {
   sla: ShieldCheck,
 };
 
-const serviceSection: Record<string, string> = {
-  'Cloud SQL': 'database',
-  BigQuery: 'processing',
-  'Cloud Storage': 'storage',
-  'Compute Engine': 'cloud',
-  'Vertex AI': 'tokens',
-  'Pub/Sub': 'processing',
-  Memorystore: 'database',
+const STATUS_STYLES = {
+  critical: { dot: 'bg-[#bd493c]', text: 'text-[#a83c30]' },
+  warning: { dot: 'bg-[#bd8b2c]', text: 'text-[#916315]' },
+  normal: { dot: 'bg-[#4c9467]', text: 'text-[#5e7165]' },
 };
-
-function getScopedResources(environment: Environment, service: string, search: string) {
-  const term = search.trim().toLowerCase();
-  return resources.filter(
-    (resource) =>
-      resource.env === environment &&
-      (service === ALL_SERVICES || resource.service === service) &&
-      (!term || `${resource.name} ${resource.service} ${resource.region} ${resource.type}`.toLowerCase().includes(term)),
-  );
-}
-
-function getScopedSection(section: SectionData, service: string, scoped: (typeof resources)[number][]) {
-  if (service !== ALL_SERVICES && serviceSection[service] !== section.id) return null;
-  if (scoped.length === 0) return null;
-  const scopeNames = new Set<string>(scoped.map((resource) => resource.name));
-  const metrics = section.metrics.map((item) => {
-    const matches = item.resources.filter((resource) => scopeNames.has(resource.name));
-    const relevant =
-      matches.length > 0 ? matches : item.resources.slice(0, Math.min(scoped.length, item.resources.length));
-    if (item.isLive) {
-      return { ...item, resources: relevant };
-    }
-    const ratio = relevant.length / Math.max(item.resources.length, 1);
-    const numeric = Number(item.value.replace(/[^0-9.]/g, ''));
-    const dynamicValue =
-      Number.isFinite(numeric) && numeric > 0 && relevant.length > 0
-        ? item.value.replace(/[\d,.]+/, (raw) => {
-            const computed = numeric * (0.56 + ratio * 0.44);
-            const decimals = raw.includes('.') ? (raw.split('.')[1]?.length ?? 0) : 0;
-            return computed.toLocaleString('pt-BR', { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
-          })
-        : item.value;
-    return { ...item, value: dynamicValue, resources: relevant };
-  });
-  return { ...section, metrics };
-}
-
-// ---------------------------------------------------------------------------
-// Real-mode sanitisation — never render demo numbers as if they were real
-// ---------------------------------------------------------------------------
-
-const UNAVAILABLE = 'Indisponível';
-
-function unavailableMetric(metric: Metric): Metric {
-  return {
-    ...metric,
-    value: UNAVAILABLE,
-    change: '—',
-    trend: 'flat',
-    severity: undefined,
-    action: undefined,
-    resources: [],
-    series: metric.series.map(() => 0),
-    isLive: false,
-    available: false,
-    source: 'unavailable',
-  };
-}
-
-function sanitizeRealSections(input: SectionData[]): SectionData[] {
-  return input.map((section) => ({
-    ...section,
-    metrics: section.metrics.map((metric) => (metric.isLive && metric.source !== 'demo' ? metric : unavailableMetric(metric))),
-    series: section.series.map((entry) => ({
-      ...entry,
-      values: entry.values.map(() => 0),
-    })),
-  }));
-}
-
-function getRealScopedSection(section: SectionData, service: string, search: string): SectionData | null {
-  if (service !== ALL_SERVICES && serviceSection[service] !== section.id) return null;
-  const term = search.trim().toLowerCase();
-  if (!term) return section;
-
-  const metrics = section.metrics.filter((metric) =>
-    `${metric.label} ${metric.description} ${metric.resources.map((resource) => resource.name).join(' ')}`
-      .toLowerCase()
-      .includes(term),
-  );
-  return metrics.length > 0 ? { ...section, metrics } : null;
-}
-
-// ---------------------------------------------------------------------------
-// DataSourceBadge — shows Live / Degraded / Demo status
-// ---------------------------------------------------------------------------
-
-function DataSourceBadge({
-  overviewResult,
-  dataMode,
-}: {
-  overviewResult: UseOverviewResult;
-  dataMode: DataMode;
-}) {
-  if (dataMode === 'mock') {
-    return (
-      <div className="mt-1 flex items-center gap-1.5 text-[11px] font-medium text-[#596a60] md:justify-end">
-        <span className="h-1.5 w-1.5 rounded-full bg-[#bd493c]" />
-        Modo demonstração · <span className="text-[#9aa49e]">dados mock</span>
-      </div>
-    );
-  }
-  if (overviewResult.loading && !overviewResult.stale) {
-    return (
-      <div className="mt-1 flex items-center gap-1.5 text-[11px] font-medium text-[#596a60] md:justify-end">
-        <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-[#c2832b]" />
-        Conectando à API…
-      </div>
-    );
-  }
-  if (overviewResult.error) {
-    return (
-      <div className="mt-1 flex items-center gap-1.5 text-[11px] font-medium text-[#596a60] md:justify-end">
-        <span className="h-1.5 w-1.5 rounded-full bg-[#bd493c]" />
-        Backend indisponível · <span className="text-[#9aa49e]">Sem dados reais</span>
-      </div>
-    );
-  }
-  if (overviewResult.data) {
-    const liveGcp = overviewResult.data.data_source === 'gcp';
-    const liveCached = overviewResult.data.data_source === 'cache';
-    return (
-      <div className="mt-1 flex items-center gap-1.5 text-[11px] font-medium text-[#596a60] md:justify-end">
-        <span
-          className={`h-1.5 w-1.5 rounded-full ${overviewResult.stale ? 'animate-pulse' : ''} ${
-            liveCached ? 'bg-[#c2832b]' : 'bg-[#4a9867]'
-          }`}
-        />
-        {liveCached ? 'API + GCP em cache' : liveGcp ? 'API + GCP ao vivo' : overviewResult.data.data_source === 'unavailable' ? 'API conectada · sem amostras GCP nesta janela' : 'API conectada · dados do backend'}
-        {overviewResult.stale && <span className="text-[#9aa49e]">(atualizando)</span>}
-      </div>
-    );
-  }
-  return (
-    <div className="mt-1 flex items-center gap-1.5 text-[11px] font-medium text-[#596a60] md:justify-end">
-      <span className="h-1.5 w-1.5 rounded-full bg-[#bd493c]" />
-      Sem dados reais
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Dashboard component
-// ---------------------------------------------------------------------------
 
 function Dashboard() {
   const { user, signOut } = useAuth();
@@ -294,11 +150,6 @@ function Dashboard() {
     [realMode, realSections, service, search, scopedResources],
   );
   const active = visibleSections.find((section) => section.id === activeSection) ?? visibleSections[0];
-  const selectedResources = useMemo(
-    () => getScopedResources(environment, service, search),
-    [environment, service, search],
-  );
-
   const realResourceCount = useMemo(() => {
     const names = new Set<string>();
     overviewSections.forEach((section) => {
@@ -309,7 +160,7 @@ function Dashboard() {
     });
     return names.size;
   }, [overviewSections]);
-  const resourceCount = realMode ? realResourceCount : selectedResources.length;
+  const resourceCount = realMode ? realResourceCount : scopedResources.length;
 
   const platformAvailability = realMode
     ? getOverviewAvailability(overviewResult.data) ?? UNAVAILABLE
@@ -328,23 +179,20 @@ function Dashboard() {
 
   function sourceForMetric(metric: Metric): DataSource {
     if (!realMode) return 'mock';
-    if (metric.isLive) return (metric.source as DataSource) ?? 'api';
+    if (metric.isLive) return metric.source ?? 'api';
     return 'offline';
   }
 
   // Section chart series driven directly by real backend readings
-  const overviewChart = active ? buildOverviewChart(active, overviewResult.data) : null;
-  const zeroSeries = active
-    ? active.series.map((entry) => ({ ...entry, values: entry.values.map(() => 0) }))
-    : [];
-
+  const overviewChart = active && !(realMode && overviewResult.data?.data_source === 'demo')
+    ? buildOverviewChart(active, overviewResult.data) : null;
   const currentSeries = realMode
-    ? (overviewChart?.series && overviewChart.series.length > 0 ? overviewChart.series : zeroSeries)
+    ? overviewChart?.series ?? []
     : (overviewChart?.series ??
       (active?.series.map((entry) => {
         const adjusted = entry.values.map((value) => {
           const envScale = environment === 'Produção' ? 1 : environment === 'Homologação' ? 0.58 : 0.31;
-          const resourceScale = Math.max(0.42, Math.min(1.2, selectedResources.length / 5));
+          const resourceScale = Math.max(0.42, Math.min(1.2, scopedResources.length / 5));
           return Number((value * envScale * resourceScale).toFixed(2));
         });
         const view = generateHourlySeries(period, adjusted);
@@ -356,26 +204,25 @@ function Dashboard() {
     : (overviewChart?.labels ??
       (active?.series[0] ? generateHourlySeries(period, active.series[0].values).labels : []));
 
-  const alertCount = visibleSections.reduce(
-    (count, section) => count + section.metrics.filter((metric) => metric.severity).length,
-    0,
-  );
-  const highPriority = visibleSections
-    .flatMap((section) =>
-      section.metrics
-        .filter((metric) => metric.severity === 'critical')
-        .map((item) => ({ ...item, section: section.title })),
-    )
-    .slice(0, 2);
+  const exportProps = {
+    scope: [environment, period, service, search, bucket].filter(Boolean).join(' · '),
+    period, demo: !realMode, labels: chartLabels, series: currentSeries,
+    multiplier: environment === 'Produção' ? 1 : environment === 'Homologação' ? 0.64 : 0.37,
+  };
 
-  const hasCriticalSignals = visibleSections.some((section) =>
-    section.metrics.some((metric) => metric.severity === 'critical'),
+  const flaggedMetrics = visibleSections.flatMap(section =>
+    section.metrics.filter(metric => metric.severity).map(metric => ({ ...metric, section: section.title })),
   );
-  const hasRealData = Boolean(overviewResult.data) || liveHasSeries;
+  const alertCount = flaggedMetrics.length;
+  const highPriority = flaggedMetrics.filter(metric => metric.severity === 'critical').slice(0, 2);
+  const hasCriticalSignals = highPriority.length > 0;
+  const scopedMetrics = visibleSections.flatMap(section => section.metrics);
+  const readings = scopedMetrics.filter(metric => metric.isLive && metric.available && metric.source !== 'estimated');
+  const hasRealData = readings.length > 0;
   const systemStatus = !realMode
     ? 'Modo demonstração'
     : !hasRealData
-      ? 'Sem dados reais'
+      ? 'Sem amostras no período'
       : !overviewResult.data
         ? 'Dados parciais'
         : gcpCircuitOpen
@@ -384,31 +231,12 @@ function Dashboard() {
             ? 'Atenção necessária'
             : alertCount > 0
               ? 'Avisos ativos'
-              : 'Sistemas normais';
-  const statusColor =
-    !realMode || !hasRealData
-      ? 'bg-[#bd493c]'
-      : !overviewResult.data
-        ? 'bg-[#bd8b2c]'
-        : gcpCircuitOpen
-          ? 'bg-[#bd493c]'
-          : hasCriticalSignals
-            ? 'bg-[#bd493c]'
-            : alertCount > 0
-              ? 'bg-[#bd8b2c]'
-              : 'bg-[#4c9467]';
-  const statusTextColor =
-    !realMode || !hasRealData
-      ? 'text-[#a83c30]'
-      : !overviewResult.data
-        ? 'text-[#916315]'
-        : gcpCircuitOpen
-          ? 'text-[#a83c30]'
-          : hasCriticalSignals
-            ? 'text-[#a83c30]'
-            : alertCount > 0
-              ? 'text-[#916315]'
-              : 'text-[#5e7165]';
+              : readings.length < scopedMetrics.length ? 'Dados parciais' : 'Sistemas normais no escopo';
+  const statusTone = !realMode || !hasRealData ? 'critical'
+    : !overviewResult.data ? 'warning'
+    : gcpCircuitOpen || hasCriticalSignals ? 'critical'
+    : alertCount > 0 ? 'warning' : 'normal';
+  const { dot: statusColor, text: statusTextColor } = STATUS_STYLES[statusTone];
 
   const initials = (user?.name ?? 'CC')
     .split(' ')
@@ -434,13 +262,18 @@ function Dashboard() {
 
   const selectedCategory = useMemo(() => {
     if (!selectedMetric) return undefined;
+    if (active?.metrics.some(m => m.id === selectedMetric.id)) return active.id;
     for (const s of sections) {
       if (s.metrics.some((m) => m.id === selectedMetric.id)) {
         return s.id;
       }
     }
     return activeSection;
-  }, [selectedMetric, activeSection]);
+  }, [selectedMetric, active, activeSection]);
+
+  const thresholdField = selectedCategory && selectedMetric
+    ? METRIC_KEYS[selectedCategory]?.[selectedMetric.id] : undefined;
+  const thresholdName = thresholdField ? `${selectedCategory}.${thresholdField}` : undefined;
 
   return (
     <TooltipProvider delayDuration={250}>
@@ -577,6 +410,28 @@ function Dashboard() {
               </div>
             )}
 
+          <div className="mb-4 rounded-xl border border-[#dfe8e2] bg-white">
+            <FiltersBar
+              period={period}
+              setPeriod={setPeriod}
+              bucket={bucket}
+              setBucket={setBucket}
+              environment={environment}
+              setEnvironment={(value) => {
+                setEnvironment(value);
+                setActiveSection('database');
+              }}
+              service={service}
+              setService={(value) => {
+                setService(value);
+                const target = serviceSection[value];
+                if (target) setActiveSection(target);
+              }}
+              search={search}
+              setSearch={setSearch}
+            />
+          </div>
+
           <section className="mb-5 grid grid-cols-1 gap-3 sm:grid-cols-3">
             <Card className="rounded-lg border-[#dce8df] bg-[#f0f7f2] shadow-none">
               <CardContent className="flex items-center justify-between gap-3 p-4">
@@ -646,7 +501,7 @@ function Dashboard() {
                       className="mt-1 font-mono text-[20px] font-medium tracking-[-.04em] text-[#26382e]"
                       data-testid="value-active-signals"
                     >
-                      {alertCount}
+                      {realMode && !hasRealData ? '—' : alertCount}
                       <span className="ml-1.5 text-[11px] text-[#86938b]">para revisar</span>
                     </div>
                   </div>
@@ -662,28 +517,10 @@ function Dashboard() {
           </section>
 
           <div className="overflow-hidden rounded-xl border border-[#dfe8e2] bg-white shadow-[0_4px_20px_rgba(33,64,45,.035)]">
-            <FiltersBar
-              period={period}
-              setPeriod={setPeriod}
-              bucket={bucket}
-              setBucket={setBucket}
-              environment={environment}
-              setEnvironment={(value) => {
-                setEnvironment(value);
-                setActiveSection('database');
-              }}
-              service={service}
-              setService={(value) => {
-                setService(value);
-                const target = serviceSection[value];
-                if (target) setActiveSection(target);
-              }}
-              search={search}
-              setSearch={setSearch}
-            />
-            {realMode && <ProjectTelemetry key={backendEnv} env={backendEnv} period={period} />}
-            {realMode && <MetricSourceOverview />}
-            {realMode && <MetricExplorer env={backendEnv} period={period} />}
+            {realMode && (
+              <ReadingsTable environment={environment} period={period} readings={readings}
+                metricCount={scopedMetrics.length} overviewResult={overviewResult} />
+            )}
             <div className="px-4 pt-4 md:px-7">
               <Tabs value={active?.id ?? ''} onValueChange={setActiveSection}>
                 <TabsList
@@ -728,6 +565,8 @@ function Dashboard() {
                           <span className="ml-1 font-mono text-[#7d8c82]">· bucket {bucket}</span>
                         )}
                       </div>
+                      {section.id === active?.id && section.metrics.length > 0 &&
+                        <SectionExport section={section} {...exportProps} />}
                     </div>
 
                     {realMode && section.id === 'database' && service === ALL_SERVICES && !search.trim() && <QdrantCard key={backendEnv} env={backendEnv} />}
@@ -781,7 +620,7 @@ function Dashboard() {
                             </div>
                           </div>
                           <div className="w-full min-w-0 max-w-full overflow-hidden">
-                            {active?.id === section.id && (
+                            {active?.id === section.id && currentSeries.length > 0 && (
                               <ApexChart
                                 key={`${section.id}-${period}-${bucket}-${realMode ? 'real' : 'mock'}`}
                                 labels={chartLabels}
@@ -829,12 +668,9 @@ function Dashboard() {
                               ))
                             ) : (
                               <div className="flex min-h-[114px] flex-col items-center justify-center text-center">
-                                <CheckCircle2 className="h-5 w-5 text-[#63a17a]" />
+                                {(!realMode || hasRealData) && <CheckCircle2 className="h-5 w-5 text-[#63a17a]" />}
                                 <span className="mt-2 text-xs font-semibold text-[#52675a]">
-                                  Nenhum sinal crítico no escopo
-                                </span>
-                                <span className="mt-1 text-[10px] text-[#8b978f]">
-                                  Os recursos selecionados estão dentro dos limites.
+                                  {realMode && !hasRealData ? 'Sem leituras para avaliar' : 'Nenhum sinal crítico nas leituras exibidas'}
                                 </span>
                               </div>
                             )}
@@ -866,18 +702,25 @@ function Dashboard() {
                       onClick={() => {
                         setSearch('');
                         setService(ALL_SERVICES);
-                        setEnvironment('Produção');
                       }}
                       data-testid="button-clear-filters"
                       variant="outline"
                       className="mt-4 h-8 border-[#dce5df] text-xs"
                     >
-                      Limpar filtros
+                      Limpar serviço e busca
                     </Button>
                   </div>
                 )}
               </Tabs>
             </div>
+            {realMode && (
+              <section aria-labelledby="diagnostics-heading" className="mt-5 border-t border-[#e5ebe7] pt-4">
+                <h2 id="diagnostics-heading" className="px-4 text-base font-semibold md:px-7">Fontes e diagnóstico</h2>
+                <ProjectTelemetry key={backendEnv} env={backendEnv} period={period} />
+                <MetricSourceOverview />
+                <MetricExplorer env={backendEnv} period={period} />
+              </section>
+            )}
             <div className="flex flex-col gap-2 border-t border-[#edf1ee] bg-[#fbfcfb] px-4 py-3 text-[9px] text-[#89958d] sm:flex-row sm:items-center sm:justify-between md:px-7">
               <div className="flex items-center gap-2">
                 <span className="font-mono font-medium tracking-wide text-[#718077]">CCD-SB100</span>
@@ -903,6 +746,11 @@ function Dashboard() {
           </div>
         </div>
         <DrilldownDialog
+          thresholdAction={thresholdName &&
+            <MetricThresholdEditor key={thresholdName} metricName={thresholdName}
+              unit={selectedMetric?.unit} onSaved={overviewResult.refetch} />}
+          exportAction={active && selectedMetric &&
+            <SectionExport section={active} metric={selectedMetric} {...exportProps} />}
           metric={selectedMetric}
           category={selectedCategory}
           environment={environment}

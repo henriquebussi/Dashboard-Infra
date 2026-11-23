@@ -74,12 +74,12 @@ const SERIES_METRIC_LABELS: Record<string, string> = {
   disk_percent: 'Utilização de disco',
   qps: 'Consultas / s',
   avg_response_time_ms: 'Tempo médio de resposta (ms)',
-  total_usage: 'Dados quentes',
-  bucket_volume_usage_percent: 'Nearline',
+  total_usage: 'Uso total',
+  bucket_volume_usage_percent: 'Uso de buckets (%)',
   iops: 'IOPS',
-  queued_jobs: 'Jobs concluídos / h',
-  running_jobs: 'Pools de processamento ativos',
-  daily_token_count: 'Tokens (milhões)',
+  queued_jobs: 'Jobs em fila',
+  running_jobs: 'Jobs em execução',
+  daily_token_count: 'Tokens',
   availability_percent: 'Disponibilidade (%)',
   error_counts_4xx_5xx: 'Erros 4xx / 5xx',
 };
@@ -165,7 +165,7 @@ export function formatMetricValue(reading: MetricReadingDto): string {
 export function formatChange(reading: MetricReadingDto): string {
   if (reading.available === false) return '—';
   const change = reading.change_percentage;
-  if (change === null || change === undefined || Number.isNaN(change)) return '0%';
+  if (change === null || change === undefined || Number.isNaN(change)) return 'Sem base de comparação';
   const sign = change > 0 ? '+' : change < 0 ? '−' : '';
   const digits = Math.abs(change) < 1 ? 2 : 1;
   return `${sign}${ptNumber(Math.abs(change), digits)}%`;
@@ -239,7 +239,7 @@ export function formatTimestampLabel(isoString: string): string {
     if (Number.isNaN(dt.getTime())) return isoString;
     const hours = String(dt.getUTCHours()).padStart(2, '0');
     const minutes = String(dt.getUTCMinutes()).padStart(2, '0');
-    return `${hours}:${minutes}`;
+    return `${dt.toLocaleDateString('pt-BR', { timeZone: 'UTC' })} ${hours}:${minutes} UTC`;
   } catch {
     return isoString;
   }
@@ -359,49 +359,32 @@ export function getMetricReading(
 export function buildOverviewChart(
   section: SectionData,
   overview: OverviewResponse | null,
-): { labels: string[]; series: SectionData['series'] } | null {
+) {
   if (!overview) return null;
-
-  let commonTimestamps: string[] = [];
-
-  const series = (SERIES_KEYS[section.id] ?? [])
-    .map((key, index) => {
-      const reading = getCategoryReading(overview, section.id, key);
-      if (!reading || reading.time_series.length === 0) return null;
-
-      if (commonTimestamps.length === 0 && reading.timestamps && reading.timestamps.length > 0) {
-        commonTimestamps = reading.timestamps;
-      } else if (commonTimestamps.length === 0 && reading.time_series.length > 0) {
-        commonTimestamps = reading.time_series.map((p) => p.timestamp);
-      }
-
-      const mockEntry = section.series[index];
-      const name = SERIES_METRIC_LABELS[key] ?? mockEntry?.name ?? key;
-      const color = SERIES_COLORS[key] ?? mockEntry?.color;
-      return {
-        name,
-        values: reading.time_series.map((point) => point.value),
-        color,
-      };
-    })
-    .filter((entry): entry is NonNullable<typeof entry> => entry !== null);
-
-  if (series.length === 0) return null;
-
-  const labels = commonTimestamps.map(formatTimestampLabel);
-  return { labels, series };
-}
-
-/**
- * Build the section-level chart series from real backend readings.
- * Returns ``null`` when the overview has no usable time-series for the section.
- */
-export function buildOverviewSeries(
-  section: SectionData,
-  overview: OverviewResponse | null,
-): SectionData['series'] | null {
-  const chart = buildOverviewChart(section, overview);
-  return chart?.series ?? null;
+  const series = (SERIES_KEYS[section.id] ?? []).flatMap((key, index) => {
+    const reading = getCategoryReading(overview, section.id, key);
+    if (!reading?.available || (overview.data_source !== 'demo' && reading.source === 'demo')) return [];
+    const points = new Map<number, number>();
+    for (const point of reading.time_series) {
+      const time = Date.parse(point.timestamp);
+      if (Number.isFinite(time)) points.set(time, point.value);
+    }
+    return points.size ? [{
+      name: SERIES_METRIC_LABELS[key] ?? key,
+      source: overview.data_source === 'demo' ? 'demo' : reading.source ?? 'gcp',
+      unit: reading.unit ?? '',
+      color: SERIES_COLORS[key] ?? section.series[index]?.color,
+      points,
+    }] : [];
+  });
+  if (!series.length) return null;
+  const times = [...new Set(series.flatMap(line => [...line.points.keys()]))].sort((a, b) => a - b);
+  return {
+    labels: times.map(time => formatTimestampLabel(new Date(time).toISOString())),
+    series: series.map(({ name, color, points, source, unit }) => ({
+      name, color, source, unit, values: times.map(time => points.get(time) ?? null),
+    })),
+  };
 }
 
 /**
@@ -434,6 +417,7 @@ export function applyOverviewToSections(
             ? metric.id === 'cost' ? 'Custo estimado' : 'Custo estimado / modelo'
             : metric.id === 'cost' ? 'Custo de infraestrutura' : 'Custo / modelo'
           : metric.label,
+        unit: reading.unit,
         value: isAvailable ? formatMetricValue(reading) : 'Indisponível',
         change: isAvailable ? formatChange(reading) : '—',
         trend: isAvailable ? trendOf(reading) : 'flat',
@@ -450,7 +434,7 @@ export function applyOverviewToSections(
         series:
           reading.time_series.length > 0
             ? reading.time_series.map((point) => point.value)
-            : (!isAvailable || isCost ? [] : metric.series),
+            : (source === 'demo' && isAvailable && !isCost ? metric.series : []),
         resources:
           reading.resources.length > 0
             ? reading.resources.map((resource) => ({
@@ -466,7 +450,7 @@ export function applyOverviewToSections(
     return {
       ...section,
       metrics,
-      series: buildOverviewSeries(section, overview) ?? section.series,
+
     };
   });
 }

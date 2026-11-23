@@ -4,7 +4,7 @@ import type { ApexOptions } from 'apexcharts';
 
 type Props = {
   labels: string[];
-  series: { name: string; values: number[]; color?: string }[];
+  series: { name: string; values: (number | null)[]; color?: string }[];
   compact?: boolean;
   type?: 'line' | 'area' | 'bar';
   stacked?: boolean;

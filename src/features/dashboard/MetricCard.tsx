@@ -2,10 +2,9 @@ import { ArrowDownRight, ArrowRight, ArrowUpRight, HelpCircle, Minus } from 'luc
 import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
-import type { Metric } from './mock-data';
 import { ApexChart } from './ApexChart';
-import { generateHourlySeries, type Period } from './mock-data';
-import { SourceBadge, SourceDot, type DataSource } from './SourceDot';
+import { generateHourlySeries, type Metric, type Period } from './mock-data';
+import { SourceBadge, type DataSource } from './SourceDot';
 
 type Props = {
   metric: Metric;
@@ -17,28 +16,20 @@ type Props = {
 
 export function MetricCard({ metric, period, multiplier, onSelect, dataSource }: Props) {
   const isAvailable = metric.available !== false;
-  const resolvedSource: DataSource = (metric.source as DataSource) ?? dataSource ?? (metric.isLive ? 'gcp' : 'mock');
+  const resolvedSource: DataSource = metric.source ?? dataSource ?? (metric.isLive ? 'gcp' : 'mock');
 
-  // Chart timestamps and series from backend if available, or hourly mock generator
-  const scale = metric.isLive ? 1 : multiplier;
-  const chart = generateHourlySeries(period, metric.series.map((value) => value * scale));
-  const isLiveWithData = Boolean(metric.isLive && metric.series.length > 0);
-  const chartValues = isLiveWithData
-    ? (isAvailable ? metric.series : metric.series.map(() => 0))
-    : (isAvailable ? chart.values.map((v) => v * scale) : chart.values.map(() => 0));
-
-  const chartLabels = isLiveWithData && metric.timestamps && metric.timestamps.length === metric.series.length
-    ? metric.timestamps.map((t) => {
-        try {
-          const dt = new Date(t);
-          return `${String(dt.getUTCHours()).padStart(2, '0')}:${String(dt.getUTCMinutes()).padStart(2, '0')}`;
-        } catch {
-          return t;
-        }
-      })
-    : isLiveWithData
-      ? metric.series.map((_, i) => `${i + 1}`)
-      : chart.labels;
+  const hasHistory = isAvailable && metric.series.length > 0;
+  const chart = !hasHistory ? null : metric.isLive
+    ? {
+        values: metric.series,
+        labels: metric.timestamps?.length === metric.series.length
+          ? metric.timestamps.map(timestamp => {
+              const date = new Date(timestamp);
+              return Number.isNaN(date.getTime()) ? timestamp : date.toISOString().slice(11, 16);
+            })
+          : metric.series.map((_, index) => String(index + 1)),
+      }
+    : generateHourlySeries(period, metric.series.map(value => value * multiplier));
 
   const TrendIcon = metric.trend === 'up' ? ArrowUpRight : metric.trend === 'down' ? ArrowDownRight : Minus;
   const severityLabel = metric.severity === 'critical' ? 'crítico' : 'atenção';
@@ -139,9 +130,9 @@ export function MetricCard({ metric, period, multiplier, onSelect, dataSource }:
               <ArrowRight className="mb-1 h-4 w-4 text-[#a2b1a8] opacity-0 transition-all group-hover:translate-x-0.5 group-hover:opacity-100" />
             </div>
           </div>
-          {isAvailable && (!metric.isLive || metric.series.length > 0) ? <ApexChart
-            labels={chartLabels}
-            series={[{ name: metric.label, values: chartValues }]}
+          {chart ? <ApexChart
+            labels={chart.labels}
+            series={[{ name: metric.label, values: chart.values }]}
             compact
           /> : <p className="px-4 pb-3 text-[10px] text-[#96a19b]">{isAvailable ? 'Sem histórico disponível.' : 'Histórico indisponível.'}</p>}
         </button>
