@@ -59,3 +59,49 @@ def authenticate_account(email: str, password: str) -> UserRole | None:
     if hmac.compare_digest(password_hash(password, salt, iterations), expected):
         return UserRole(role)
     return None
+
+
+def list_accounts():
+    initialize_accounts()
+    with database() as db:
+        return [{"email": email, "role": role} for email, role in
+                db.execute("SELECT email, role FROM accounts ORDER BY email")]
+
+
+def save_account(email, role, password, actor, original=None):
+    from schemas import AuditActionType, AuditLogEntry
+
+    initialize_accounts()
+    if password is not None:
+        salt = secrets.token_bytes(16)
+        credentials = (salt, password_hash(password, salt, PASSWORD_ITERATIONS), PASSWORD_ITERATIONS)
+    with database() as db:
+        db.execute("BEGIN IMMEDIATE")
+        previous = None
+        if original is not None:
+            row = db.execute("SELECT role, salt, password_hash, password_iterations FROM accounts WHERE email=?",
+                             (original,)).fetchone()
+            if row is None:
+                raise LookupError("Usuário não encontrado")
+            previous = {"email": original, "role": row[0]}
+            if row[0] == UserRole.INFRA_ADMIN and role != UserRole.INFRA_ADMIN:
+                count = db.execute("SELECT COUNT(*) FROM accounts WHERE role=?", (UserRole.INFRA_ADMIN,)).fetchone()[0]
+                if count == 1:
+                    raise ValueError("Mantenha pelo menos um administrador")
+            if password is None:
+                credentials = row[1:]
+        elif password is None:
+            raise ValueError("Informe uma senha para o novo usuário")
+        if email != original and db.execute("SELECT 1 FROM accounts WHERE email=?", (email,)).fetchone():
+            raise ValueError("Este e-mail já está cadastrado")
+        if original is None:
+            db.execute("INSERT INTO accounts VALUES (?, ?, ?, ?, ?)", (email, role.value, *credentials))
+        else:
+            db.execute("UPDATE accounts SET email=?, role=?, salt=?, password_hash=?, password_iterations=? WHERE email=?",
+                       (email, role.value, *credentials, original))
+        result = {"email": email, "role": role.value}
+        entry = AuditLogEntry(user_id=actor, action_type=AuditActionType.CONFIG_CHANGE,
+                              targeted_metric=f"account.{original or email}", previous_value=previous,
+                              new_value={**result, "password_changed": password is not None})
+        db.execute("INSERT INTO audit VALUES (?)", (entry.model_dump_json(),))
+        return result

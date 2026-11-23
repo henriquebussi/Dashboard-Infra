@@ -34,12 +34,15 @@ from fastapi import FastAPI, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from routers.accounts import router as accounts_router
 from routers.exports import router as exports_router
 from routers.gcp import router as gcp_router
 from routers.metrics import router as metrics_router
+from routers.reports import router as reports_router
 from services.accounts import initialize_accounts
 from services.cache import RedisCache
 from services.gcp_service import CachedGCPMetricsService
+from services.report_schedule import run_due
 
 logger = logging.getLogger("gcp_observatory.main")
 
@@ -140,7 +143,15 @@ async def lifespan(app: FastAPI):
 
     logger.info("[Lifespan] Startup complete. Redis enabled=%s | GCP project=%s", redis_enabled, project_id or "N/A")
 
-    yield  # ← app is running
+    report_task = asyncio.create_task(run_due(app))
+    try:
+        yield  # ← app is running
+    finally:
+        report_task.cancel()
+        try:
+            await report_task
+        except asyncio.CancelledError:
+            pass
 
     # --- Shutdown ---
     await redis_cache.close()
@@ -292,6 +303,9 @@ async def root() -> Dict[str, Any]:
 # Execution Entry Point
 # ============================================================================
 
+app.include_router(accounts_router, prefix="/api/v1")
+
+
 if __name__ == "__main__":
     import uvicorn
 
@@ -301,3 +315,5 @@ if __name__ == "__main__":
         port=int(os.getenv("API_PORT", "8000")),
         reload=True,
     )
+
+app.include_router(reports_router, prefix="/api/v1")

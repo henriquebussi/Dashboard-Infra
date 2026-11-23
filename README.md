@@ -59,6 +59,12 @@ cp -n .env.example .env
 
 Reinicie o backend após editar o `.env`. Consulte o [inventário de métricas](METRIC_SOURCES.md) para detalhes sobre dados disponíveis.
 
+## Relatórios de desempenho
+
+Administradores podem abrir **Relatórios de desempenho** no painel, gerar um relatório imediatamente ou agendar o envio diário, semanal ou mensal em CSV, XLSX ou PDF. O relatório usa as métricas reais do ambiente selecionado. Os agendamentos e o histórico das alterações ficam no SQLite.
+
+Para enviar por e-mail, configure `REPORT_SMTP_HOST`, `REPORT_SMTP_PORT` e `REPORT_SMTP_FROM` no `.env`. Configure também `REPORT_SMTP_USER` e `REPORT_SMTP_PASSWORD` quando o servidor SMTP exigir autenticação. `REPORT_SMTP_STARTTLS=true` habilita TLS. Reinicie o backend após configurar. O processo do backend executa os agendamentos enquanto está ativo. Se a geração ou o envio falhar, o painel mostra o estado **failed** e tenta novamente em 15 minutos.
+
 ## Build e testes
 
 - `npm run build` gera o frontend em `dist/`.

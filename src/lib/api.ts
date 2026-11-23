@@ -498,3 +498,47 @@ export function getThresholdHistory(metricName: string, offset: number, signal: 
   });
   return apiFetch<ConfigurationAuditEntry[]>(`/audit-logs?${params}`, {signal});
 }
+
+export type ReportSchedule = {
+  id: string;
+  recipient: string;
+  frequency: 'daily' | 'weekly' | 'monthly';
+  environment: 'PROD' | 'STAGING' | 'DEV';
+  period: '24h' | '7d' | '30d';
+  format: 'csv' | 'xlsx' | 'pdf';
+  next_run: string;
+  last_run: string | null;
+  last_status: string | null;
+};
+
+export type ReportScheduleInput = Pick<ReportSchedule, 'recipient' | 'frequency' | 'environment' | 'period' | 'format'>;
+
+export function listReportSchedules() {
+  return apiFetch<ReportSchedule[]>('/reports/schedules');
+}
+
+export function createReportSchedule(config: ReportScheduleInput) {
+  return apiFetch<{id: string}>('/reports/schedules', {method: 'POST', body: JSON.stringify(config)});
+}
+
+export function deleteReportSchedule(id: string) {
+  return apiResponse(`/reports/schedules/${encodeURIComponent(id)}`, {method: 'DELETE'});
+}
+
+export async function downloadPerformanceReport(environment: string, period: string, format: string) {
+  const query = new URLSearchParams({environment, period, format});
+  return (await apiResponse(`/reports/download?${query}`)).blob();
+}
+
+export type DashboardAccount = {email: string; role: 'VIEW_ONLY' | 'INFRA_ADMIN'};
+
+export function listAccounts() {
+  return apiFetch<DashboardAccount[]>('/accounts');
+}
+
+export function saveAccount(account: DashboardAccount, password: string, original?: string) {
+  return apiFetch<DashboardAccount>(original ? `/accounts/${encodeURIComponent(original)}` : '/accounts', {
+    method: original ? 'PUT' : 'POST',
+    body: JSON.stringify({...account, password: password || undefined}),
+  });
+}

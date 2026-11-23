@@ -1,3 +1,5 @@
+import { HeaderActions } from '@/features/dashboard/HeaderActions';
+import { PerformanceReports } from '@/features/dashboard/PerformanceReports';
 import { DataSourceBadge } from '@/features/dashboard/DataSourceBadge';
 import { ReadingsTable } from '@/features/dashboard/ReadingsTable';
 import {
@@ -20,7 +22,6 @@ import {
   AlertTriangle,
   ArrowRight,
   ArrowUpRight,
-  Bell,
   BrainCircuit,
   CheckCircle2,
   Cloud,
@@ -211,7 +212,7 @@ function Dashboard() {
   };
 
   const flaggedMetrics = visibleSections.flatMap(section =>
-    section.metrics.filter(metric => metric.severity).map(metric => ({ ...metric, section: section.title })),
+    section.metrics.filter(metric => metric.severity).map(metric => ({ ...metric, section: section.title, sectionId: section.id })),
   );
   const alertCount = flaggedMetrics.length;
   const highPriority = flaggedMetrics.filter(metric => metric.severity === 'critical').slice(0, 2);
@@ -327,26 +328,13 @@ function Dashboard() {
                 <span className={`h-2 w-2 rounded-full ${statusColor}`} />
                 <span className={`text-[10px] font-semibold ${statusTextColor}`}>{systemStatus}</span>
               </div>
-              <Button
-                variant="ghost"
-                size="icon"
-                data-testid="button-notifications"
-                className="relative h-9 w-9 text-[#69796f] hover:bg-[#f0f5f1]"
-              >
-                <Bell className="h-[17px] w-[17px]" />
-                {alertCount > 0 && (
-                  <span className="absolute right-[7px] top-[7px] h-1.5 w-1.5 rounded-full bg-[#c2832b] ring-2 ring-white" />
-                )}
-                <span className="sr-only">Abrir alertas</span>
-              </Button>
-              <div className="hidden h-7 w-px bg-[#e6ece8] sm:block" />
-              <div
-                className="flex h-8 w-8 items-center justify-center rounded-full border border-[#d7e5dc] bg-[#eff6f1] text-[10px] font-bold tracking-wide text-[#326b4d]"
-                data-testid="text-team-avatar"
-                title={user?.email}
-              >
-                {initials}
-              </div>
+              <HeaderActions user={user} initials={initials} alerts={flaggedMetrics}
+                scope={[environment, period, service, realMode ? 'Real' : 'Demonstração'].join(' · ')}
+                onSelect={alert => {
+                  setActiveSection(alert.sectionId);
+                  setSelectedMetric(alert);
+                }}
+                onSignOut={handleSignOut} />
               <Button
                 variant="ghost"
                 size="icon"
@@ -430,6 +418,7 @@ function Dashboard() {
               search={search}
               setSearch={setSearch}
             />
+            <PerformanceReports />
           </div>
 
           <section className="mb-5 grid grid-cols-1 gap-3 sm:grid-cols-3">

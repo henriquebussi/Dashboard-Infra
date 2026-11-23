@@ -1,6 +1,7 @@
 import { type ReactNode } from 'react';
 import { ErrorBoundary } from '@/components/error-boundary';
 import { TooltipProvider } from '@/components/ui/tooltip';
+import { ThemeProvider } from '@/components/theme-provider';
 import { AuthProvider, useAuth } from '@/lib/auth';
 import NotFound from '@/pages/not-found';
 import Dashboard from '@/pages/dashboard';
@@ -44,13 +45,15 @@ function RoutedErrorBoundary({ children }: { children: ReactNode }) {
 
 function App() {
   return (
-    <AuthProvider>
-      <TooltipProvider>
-        <WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, '')}>
-          <Router />
-        </WouterRouter>
-      </TooltipProvider>
-    </AuthProvider>
+    <ThemeProvider defaultTheme="light" storageKey="dashboard-theme">
+      <AuthProvider>
+        <TooltipProvider>
+          <WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, '')}>
+            <Router />
+          </WouterRouter>
+        </TooltipProvider>
+      </AuthProvider>
+    </ThemeProvider>
   );
 }
 

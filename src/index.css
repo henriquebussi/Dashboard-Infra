@@ -67,6 +67,66 @@
   --radius-xl: calc(var(--radius) + 4px);
 }
 
+/* Dashboard surfaces still use fixed light palette utilities. Keep their
+   existing light appearance and translate those surfaces when dark is active. */
+html.dark main {
+  color-scheme: dark;
+  background-color: #101b15;
+  color: #e5f0e8;
+}
+
+html.dark main :is(
+  [class~="bg-white"], [class~="bg-[#fafcfb]"], [class~="bg-[#fbfcfb]"],
+  [class~="bg-[#f9fbf9]"], [class~="bg-[#f6f9f7]"], [class~="bg-[#f5f8f6]"]
+) { background-color: #17231d; }
+
+html.dark main :is(
+  [class~="bg-[#f0f5f1]"], [class~="bg-[#f1f7f3]"], [class~="bg-[#f2f6f3]"],
+  [class~="bg-[#eaf3ed]"], [class~="bg-[#eaf4ee]"], [class~="bg-[#e8f2ec]"],
+  [class~="bg-[#eff6f1]"], [class~="bg-[#f0f7f2]"]
+) { background-color: #21382a; }
+
+html.dark main :is(
+  [class~="bg-[#fff8e8]"], [class~="bg-[#fff8e9]"], [class~="bg-[#fdfaf3]"]
+) { background-color: #372d1b; }
+
+html.dark main :is(
+  [class~="bg-[#fff1ef]"], [class~="bg-[#fff6f5]"]
+) { background-color: #3b2625; }
+
+html.dark main :is(
+  [class~="border-[#dce6df]"], [class~="border-[#cfddd3]"],
+  [class~="border-[#dce5df]"], [class~="border-[#e6ece8]"],
+  [class~="border-[#e5ebe7]"], [class~="border-[#cbdcd1]"],
+  [class~="border-[#e2e9e4]"], [class~="border-[#dfe8e2]"],
+  [class~="border-[#dfe7e1]"], [class~="border-[#dce8df]"],
+  [class~="border-[#e8eeea]"], [class~="border-[#e4e9e5]"]
+) { border-color: #334b3b; }
+
+html.dark main :is(
+  [class~="text-[#203329]"], [class~="text-[#1d3027]"],
+  [class~="text-[#293a31]"], [class~="text-[#26382e]"]
+) { color: #e5f0e8; }
+
+html.dark main :is(
+  [class~="text-[#52665a]"], [class~="text-[#707d75]"],
+  [class~="text-[#9aa49e]"], [class~="text-[#596a60]"],
+  [class~="text-[#69796f]"], [class~="text-[#86938b]"],
+  [class~="text-[#8a968f]"], [class~="text-[#95a099]"],
+  [class~="text-[#738279]"], [class~="text-[#7c8981]"]
+) { color: #aabbb0; }
+
+html.dark main :is(
+  [class~="text-[#286b4c]"], [class~="text-[#224e37]"],
+  [class~="text-[#1f694b]"], [class~="text-[#326b4d]"]
+) { color: #80d3a0; }
+
+html.dark main :is([class~="text-[#916315]"], [class~="text-[#7d5f19]"])
+{ color: #f0c879; }
+
+html.dark main :is([class~="text-[#a83c30]"], [class~="text-[#a03d32]"])
+{ color: #f3a099; }
+
 /* LIGHT MODE */
 :root {
   --button-outline: rgba(0, 0, 0, 0.1);
