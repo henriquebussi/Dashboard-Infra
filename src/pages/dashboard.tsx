@@ -279,11 +279,14 @@ function Dashboard() {
   return (
     <TooltipProvider delayDuration={250}>
       <main className="min-h-[100dvh] bg-[#f6f9f7] text-[#203329]">
+        <a href="#dashboard-content" className="sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:z-[60] focus:rounded-md focus:bg-card focus:px-4 focus:py-3 focus:text-card-foreground focus:ring-2 focus:ring-ring">
+          Ir para o conteúdo do Dashboard
+        </a>
         <header className="border-b border-[#dfe8e2] bg-white">
-          <div className="mx-auto flex max-w-[1480px] items-center justify-between gap-4 px-4 py-3.5 md:px-8">
+          <div className="mx-auto flex max-w-[1480px] flex-wrap items-center justify-between gap-x-4 gap-y-3 px-4 py-3.5 md:px-8">
             <div className="flex min-w-0 items-center gap-3">
               <div className="h-9 w-9 shrink-0 overflow-hidden rounded-lg bg-white ring-1 ring-[#dfe7e1]">
-                <img src={logoUrl} alt="Logo do Projeto CCD-SB100" className="h-full w-full object-cover" />
+                <img src={logoUrl} width={36} height={36} alt="Logo do Projeto CCD-SB100" className="h-full w-full object-cover" />
               </div>
               <div className="min-w-0">
                 <div className="flex items-center gap-2">
@@ -295,7 +298,7 @@ function Dashboard() {
                 </div>
               </div>
             </div>
-            <div className="flex items-center gap-2.5">
+            <div className="flex w-full items-center justify-between gap-2 sm:w-auto sm:justify-end">
               <div
                 className="flex shrink-0 items-center rounded-md border border-[#dfe7e1] bg-[#fafcfb] p-0.5"
                 data-testid="data-mode-toggle"
@@ -350,7 +353,7 @@ function Dashboard() {
           </div>
         </header>
 
-        <div className="mx-auto max-w-[1480px] px-4 pb-10 md:px-8">
+        <div id="dashboard-content" tabIndex={-1} className="mx-auto max-w-[1480px] px-4 pb-10 md:px-8">
           <section className="flex flex-col gap-5 pb-5 pt-7 md:flex-row md:items-end md:justify-between md:pt-8">
             <div>
               <div className="mb-2 flex items-center gap-2" data-testid="text-overview-environment">
@@ -362,7 +365,7 @@ function Dashboard() {
               <h1 className="font-display text-[27px] font-extrabold leading-tight tracking-[-.055em] text-[#1d3027] md:text-[32px]">
                 Visão geral da plataforma
               </h1>
-              <p className="mt-1.5 max-w-[560px] text-[13px] leading-relaxed text-[#75827a]">
+              <p className="mt-1.5 max-w-[560px] text-sm leading-relaxed text-muted-foreground">
                 Monitoramento da infraestrutura de IA do Projeto CCD-SB100, uma pesquisa em agricultura apoiada pela
                 FAPESP.
               </p>
@@ -387,11 +390,15 @@ function Dashboard() {
                 <AlertTriangle className="h-4 w-4 shrink-0 text-[#c2832b]" />
                 <div className="flex-1">
                   {overviewResult.data.environment_scope === 'single-project' && (
-                    <span className="mr-1 font-semibold">Escopo de Projeto Único:</span>
+                    <span className="mr-1 font-semibold">Projeto único.</span>
                   )}
                   <span>
                     {overviewResult.data.warnings && overviewResult.data.warnings.length > 0
-                      ? overviewResult.data.warnings.join(' · ')
+                      ? overviewResult.data.warnings.map(warning =>
+                          warning.startsWith('Environment mapping not configured for ')
+                            ? 'O ambiente selecionado usa o projeto GCP padrão porque não tem um projeto próprio configurado.'
+                            : warning,
+                        ).join(' · ')
                       : 'Métricas de todos os ambientes estão mapeadas para o mesmo projeto GCP (GCP_PROJECT_MAP não configurado).'}
                   </span>
                 </div>
@@ -525,7 +532,7 @@ function Dashboard() {
                         value={section.id}
                         disabled={!enabled}
                         data-testid={`tab-${section.id}`}
-                        className="mb-[-1px] min-w-max gap-2 rounded-none border-b-2 border-transparent px-3 pb-3 pt-1 text-[12px] font-semibold text-[#7c8981] shadow-none data-[state=active]:border-[#286b4c] data-[state=active]:bg-transparent data-[state=active]:text-[#286b4c] data-[state=active]:shadow-none disabled:opacity-35 md:px-4"
+                        className="mb-[-1px] min-w-max gap-2 rounded-none border-b-2 border-transparent px-3 pb-3 pt-1 text-xs font-semibold text-muted-foreground focus-visible:ring-inset shadow-none data-[state=active]:border-[#286b4c] data-[state=active]:bg-transparent data-[state=active]:text-[#286b4c] dark:data-[state=active]:border-primary dark:data-[state=active]:text-foreground data-[state=active]:shadow-none disabled:opacity-35 md:px-4"
                       >
                         <Icon className="h-3.5 w-3.5" />
                         {section.title}

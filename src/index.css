@@ -71,8 +71,9 @@
    existing light appearance and translate those surfaces when dark is active. */
 html.dark main {
   color-scheme: dark;
+  --dashboard-dark-text: #effaf1;
   background-color: #101b15;
-  color: #e5f0e8;
+  color: var(--dashboard-dark-text);
 }
 
 html.dark main :is(
@@ -105,8 +106,13 @@ html.dark main :is(
 
 html.dark main :is(
   [class~="text-[#203329]"], [class~="text-[#1d3027]"],
-  [class~="text-[#293a31]"], [class~="text-[#26382e]"]
-) { color: #e5f0e8; }
+  [class~="text-[#293a31]"], [class~="text-[#26382e]"],
+  [class~="text-[#1c3328]"], [class~="text-[#263a2e]"],
+  [class~="text-[#293b31]"], [class~="text-[#304136]"],
+  [class~="text-[#33473b]"], [class~="text-[#34493c]"],
+  [class~="text-[#41564a]"], [class~="text-[#43564a]"],
+  [class~="text-[#45554b]"], [class~="text-[#46574b]"]
+) { color: var(--dashboard-dark-text); }
 
 html.dark main :is(
   [class~="text-[#52665a]"], [class~="text-[#707d75]"],
@@ -118,8 +124,13 @@ html.dark main :is(
 
 html.dark main :is(
   [class~="text-[#286b4c]"], [class~="text-[#224e37]"],
-  [class~="text-[#1f694b]"], [class~="text-[#326b4d]"]
-) { color: #80d3a0; }
+  [class~="text-[#1f694b]"], [class~="text-[#326b4d]"],
+  [class~="text-[#244b37]"], [class~="text-[#285d42]"],
+  [class~="text-[#287553]"], [class~="text-[#314c3b]"],
+  [class~="text-[#346b4c]"], [class~="text-[#347953]"],
+  [class~="text-[#3d7c59]"], [class~="text-[#438060]"],
+  [class~="text-[#4b7a60]"]
+) { color: var(--dashboard-dark-text); }
 
 html.dark main :is([class~="text-[#916315]"], [class~="text-[#7d5f19]"])
 { color: #f0c879; }

@@ -51,7 +51,7 @@ export function HeaderActions({user, initials, alerts, scope, onSelect, onSignOu
     return () => document.removeEventListener('pointerdown', closeOutside);
   }, [openPanel]);
 
-  const panel = 'absolute right-0 top-full z-50 mt-2 max-h-[65dvh] w-[min(22rem,calc(100vw-5rem))] overflow-auto rounded-lg border border-[#dce6df] bg-white p-4 shadow-lg';
+  const panel = 'absolute right-0 top-full z-50 mt-2 max-h-[65dvh] w-[min(22rem,calc(100vw-6rem))] overflow-auto rounded-lg border border-[#dce6df] bg-white p-4 shadow-lg';
   return <div ref={actions} className="relative flex items-center gap-2.5" onKeyDown={event => {
     if (event.key !== 'Escape' || !openPanel) return;
     actions.current?.querySelector<HTMLButtonElement>('button[aria-expanded="true"]')?.focus();
@@ -85,7 +85,7 @@ export function HeaderActions({user, initials, alerts, scope, onSelect, onSignOu
             <button type="button" className="w-full rounded-md p-3 text-left text-sm hover:bg-[#f0f5f1]"
               onClick={() => { setOpenPanel(null); onSelect(alert); }}>
               <span className="block font-semibold text-[#203329]">{alert.label} · {alert.value}</span>
-              <span className={alert.severity === 'critical' ? 'text-red-700' : 'text-amber-800'}>
+              <span className={alert.severity === 'critical' ? 'text-red-700 dark:text-red-300' : 'text-amber-800 dark:text-amber-300'}>
                 {alert.severity === 'critical' ? 'Crítico' : 'Atenção'} · {alert.section}
               </span>
               {alert.action && <span className="block text-muted-foreground">{alert.action}</span>}

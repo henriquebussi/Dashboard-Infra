@@ -4,19 +4,19 @@ import { useTheme } from "@/components/theme-provider"
 
 export function ThemeToggle() {
   const { theme, setTheme } = useTheme()
+  const dark = theme === "dark" || (theme === "system" && window.matchMedia("(prefers-color-scheme: dark)").matches)
 
   return (
     <Button
       variant="ghost"
       size="icon"
-      onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
-      className="relative h-9 w-9 text-[#69796f] hover:bg-[#f0f5f1] dark:text-muted-foreground dark:hover:bg-accent"
-      aria-label={theme === "dark" ? "Ativar modo claro" : "Ativar modo escuro"}
-      aria-pressed={theme === "dark"}
-      title={theme === "dark" ? "Modo claro" : "Modo escuro"}
+      onClick={() => setTheme(dark ? "light" : "dark")}
+      className="h-9 w-9 text-[#69796f] hover:bg-[#f0f5f1] dark:text-muted-foreground dark:hover:bg-accent"
+      aria-label="Modo escuro"
+      aria-pressed={dark}
+      title={dark ? "Ativar modo claro" : "Ativar modo escuro"}
     >
-      <Sun className="h-[1.2rem] w-[1.2rem] rotate-0 scale-100 transition-all dark:-rotate-90 dark:scale-0" />
-      <Moon className="absolute h-[1.2rem] w-[1.2rem] rotate-90 scale-0 transition-all dark:rotate-0 dark:scale-100" />
+      {dark ? <Sun aria-hidden="true" /> : <Moon aria-hidden="true" />}
     </Button>
   )
 }
